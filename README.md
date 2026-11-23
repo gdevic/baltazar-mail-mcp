@@ -17,7 +17,7 @@
 - **Nothing here changes it.** This repository reads the app's repository and never writes to it. The app's source, its packages and what its documents promise are exactly what they are without this.
 - **It keeps being checked for safety and security**, as its own repository records in `SECURITY.md`, `PRIVACY.md` and `docs/security-review.md`.
 
-AI access exists only in a copy that you build yourself from this repository and load into your own browser by hand. Nobody gets it by installing or updating Baltazar Mail.
+AI access exists only in a copy built from this repository or downloaded from its releases, and loaded into your own browser by hand. Nobody gets it by installing or updating Baltazar Mail, from a store or from the app's own releases.
 
 ## What this is
 
@@ -33,14 +33,24 @@ The build here is an overlay. `tools/build.js` asks the app's own build for each
 - **`glue/`** is appended: each file to the app's file of the same name. Appended to a module, the glue stands inside it and uses its functions by name. That is how AI access reaches the folder pane, the undo history and the composer while the app's source knows nothing of it.
 - **The manifest** lets the pages reach the one local address, and says "with AI access" beside the version.
 
-The build with AI access keeps the extension's key, so it has the same id as the app's own unpacked build: the browser holds one or the other, with the same settings and sign-in.
+The build with AI access keeps the app's version and the extension's key, so it is the same extension as the app's own build: the browser holds one or the other, with the same settings and sign-in.
 
 ## Use
 
-The app's repository is expected beside this one, as `../baltazar-mail`; `BALTAZAR_MAIL_REPO` names another place.
+Steps 1 and 2 put the extension with AI access in place of the app's own, in one of two ways.
+
+**From a release.** Each release here goes with the app's release of the same version and holds a ZIP of each edition: the app's own release ZIP with AI access laid over it, with the same version, the same key and the same folder inside.
+
+1. Download `baltazar-mail-yahoo-<version>-mcp.zip` or `baltazar-mail-gmail-<version>-mcp.zip` and unzip it over the folder Baltazar Mail is loaded from, replacing the files.
+2. Click **Reload** on the extension's card in the browser's extensions page. It is the same extension, so settings, sign-in and address book stay; the card now shows the version as "<version> with AI access". Take `server/baltazar-mail-mcp.mjs` from the release's source code.
+
+**From source.** The app's repository is expected beside this one, as `../baltazar-mail`; `BALTAZAR_MAIL_REPO` names another place.
 
 1. Build: `node tools/build.js`
-2. In the browser's extension page, remove the copy loaded from the app's own `dist/` and load `dist/baltazar-mail-yahoo` or `dist/baltazar-mail-gmail` from here.
+2. Load `dist/baltazar-mail-yahoo` or `dist/baltazar-mail-gmail` from here in place of the copy loaded from the app's own `dist/`. Built on the same machine, the two have the same key, so the browser takes one or the other as the same extension.
+
+Then, either way:
+
 3. In the mail tab: Settings, AI access, tick the box, press Copy.
 4. Run `node server/baltazar-mail-mcp.mjs setup`. It takes the code from the clipboard, saves it, and adds the server to Claude Code. Do steps 3 and 4 once for each mailbox.
 
@@ -48,7 +58,9 @@ The app's repository is expected beside this one, as `../baltazar-mail`; `BALTAZ
 
 The mail tab must be open. With both mailboxes connected, a tool call names one with `account` (`yahoo`, `gmail`, or the address).
 
-Never commit `dist/` or `out/`: a build carries what your own `local.json` files hold, such as an extension key or an OAuth client id.
+To go back to Baltazar Mail without AI access, put the app's own files back in the folder (its release ZIP, or its own build) and reload.
+
+Never commit `dist/` or `out/`: a build made on your machine carries what your own `local.json` files hold, such as an extension key or an OAuth client id. The release ZIPs are built on GitHub, where there are none.
 
 ## What an assistant can do
 
@@ -81,7 +93,18 @@ The build always uses the app's repository as it is now, so its changes need no 
 - **A name the glue uses is gone.** Each glue file lists the app's names it uses (`uses:`); the build stops and names the missing ones.
 - **A function the glue follows has changed.** The glue's actions do what `doSetRead`, `doSetStarred`, `doMove`, `startCompose` and a few others do, for messages that need not be in the list. Each glue file lists them (`watches:`), and the build reports any whose text differs from what `glue/watched.json` records. Compare the function with the glue, run the checks, then `node tools/build.js --reviewed`.
 
+## Versions and releases
+
+`VERSION` here is the app's version this repository goes with: `0.23.0` goes with Baltazar Mail 0.23.0. A release of this side alone, for the same app version, adds a number after a dash: `0.23.0-2`. The build says when the app beside it is another version, and the checks fail until `VERSION` here follows.
+
+A release is made after the app's own release of that version, since it is built on the app's tag:
+
+1. Run `node tools/check.js --app` against the app as released; fix the glue if the build reports a change.
+2. Set `VERSION`, commit, push.
+3. Run the Release workflow with the tag (`gh workflow run release.yml -f tag=v0.23.0`). It checks out the app at its tag of the same version, runs every check against it (this repository's, and the app's own browser suites against the build with AI access), and only then builds and publishes the two ZIPs with their SHA-256 files and a signed record of the build. It makes no package for a browser store.
+
 ## Checks
 
 - `node tools/check.js` runs everything here: the overlay, the wire, the server, and both editions in a browser against the app's mocked mailboxes (about 40 seconds).
 - `node tools/check.js --app` also runs the app's own tests against the build with AI access, which tells whether the glue disturbs the app.
+- On GitHub the same checks run on every push here, against the app's `main`, and before every release, against the app's tag.

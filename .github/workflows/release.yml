@@ -1,0 +1,143 @@
+# Publishes a GitHub release whose assets are ZIPs of the two extensions of Baltazar Mail with AI
+# access laid over them: each is the app's own release ZIP of the same version (the same build of
+# the same tagged commit, the same key, the same folder inside) plus what this repository adds, so
+# it unzips over the app's folder and the browser reloads it as the same extension. No package for
+# a browser store is made.
+# Runs from the Actions tab (Run workflow) with a tag name, from main. The tag is v and the
+# version in VERSION: the app's version this repository goes with (v0.23.0), and after a dash the
+# number of a release of this side alone (v0.23.0-2). The app must have been released first: its
+# tag of that version is what is built on. Nothing is published unless every check passes against
+# that tag (checks.yml).
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, e.g. v0.23.0 or v0.23.0-2 (must match VERSION)"
+        required: true
+
+permissions:
+  contents: write
+  id-token: write        # signs the build provenance
+  attestations: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.ver.outputs.tag }}
+      version: ${{ steps.ver.outputs.version }}
+      app_tag: ${{ steps.ver.outputs.app_tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0        # with tags, to see whether the release tag already exists
+
+      # The tag reaches the shell only through an environment variable, never by expansion into
+      # the script text, and must be the version VERSION names.
+      - name: Check version, branch and tag
+        id: ver
+        env:
+          TAG: ${{ github.event.inputs.tag }}
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          version="$(tr -d '[:space:]' < VERSION)"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[1-9][0-9]*)?$ ]]; then echo "VERSION does not hold a version: $version"; exit 1; fi
+          if [[ "$TAG" != "v$version" ]]; then echo "the tag given is not v$version, which VERSION names"; exit 1; fi
+          if [[ "$REF" != "refs/heads/main" ]]; then echo "a release is made from main"; exit 1; fi
+          if git rev-parse -q --verify "refs/tags/$TAG" > /dev/null && [[ "$(git rev-parse "refs/tags/$TAG^{commit}")" != "$GITHUB_SHA" ]]; then echo "the tag $TAG exists at another commit"; exit 1; fi
+          {
+            echo "tag=$TAG"
+            echo "version=$version"
+            echo "app_tag=v${version%%-*}"
+          } >> "$GITHUB_OUTPUT"
+
+  checks:
+    needs: check
+    uses: ./.github/workflows/checks.yml
+    with:
+      app_ref: ${{ needs.check.outputs.app_tag }}
+    permissions:
+      contents: read
+
+  release:
+    needs: [check, checks]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: baltazar-mail-mcp
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: gdevic/baltazar-mail
+          ref: ${{ needs.check.outputs.app_tag }}
+          path: baltazar-mail
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      - name: Package
+        working-directory: baltazar-mail-mcp
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          # tools/build.js asks the app's build, at the app's tag, for each edition and lays this
+          # repository over it. As in the app's own release, no local.json is here, so a ZIP
+          # carries what the app's ZIP carries and no more; the folder inside keeps the app's
+          # name, and the app's licence goes in as it does there.
+          node tools/build.js --release
+          for name in baltazar-mail-yahoo baltazar-mail-gmail; do
+            find "dist/$name" -name '.DS_Store' -delete
+            cp ../baltazar-mail/LICENSE "dist/$name/LICENSE"
+            if grep -q '"oauth2"' "dist/$name/manifest.json"; then echo "the $name manifest carries an OAuth client"; exit 1; fi
+            zipname="$name-$VERSION-mcp.zip"
+            (cd dist && zip -qr9 "$zipname" "$name")
+            unzip -l "dist/$zipname" | grep -q " $name/manifest.json$"
+            (cd dist && sha256sum "$zipname" > "$zipname.sha256")
+          done
+
+      - name: Record build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            baltazar-mail-mcp/dist/baltazar-mail-yahoo-${{ needs.check.outputs.version }}-mcp.zip
+            baltazar-mail-mcp/dist/baltazar-mail-gmail-${{ needs.check.outputs.version }}-mcp.zip
+
+      - name: Publish
+        working-directory: baltazar-mail-mcp
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.check.outputs.tag }}
+          VERSION: ${{ needs.check.outputs.version }}
+          APP_TAG: ${{ needs.check.outputs.app_tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          tag="$TAG"
+          version="$VERSION"
+          app="${APP_TAG#v}"
+          cat > notes.md <<NOTES
+          ## EXPERIMENTAL. FOR PRIVATE USE ONLY. ENTIRELY AT YOUR OWN RISK.
+          This adds AI access (MCP) to Baltazar Mail $app. It is an experiment, for people who know exactly what they are doing and who take full responsibility: once an AI assistant is attached to a mailbox, anything can happen. Read the [README](https://github.com/$REPO#readme) first. Baltazar Mail itself has no MCP code of any kind and is not affected by anything here.
+
+          ### What is here
+          **baltazar-mail-yahoo-$version-mcp.zip** and **baltazar-mail-gmail-$version-mcp.zip** are the two extensions of [Baltazar Mail $app](https://github.com/gdevic/baltazar-mail/releases/tag/$APP_TAG) with AI access laid over them: the same version, the same key, the same folder inside. Every other file in them is the app's own, byte for byte.
+
+          ### Install
+          1. Unzip over the folder Baltazar Mail $app is loaded from, replacing the files (the ZIP holds one folder, \`baltazar-mail-yahoo\` or \`baltazar-mail-gmail\`, as the app's ZIP does), then click **Reload** on the extension's card in the extensions page. It is the same extension: its settings, sign-in and address book stay. The card then shows the version as "$version with AI access".
+          2. Take \`server/baltazar-mail-mcp.mjs\` from the source code of this release, and follow the README from step 3 of "Use".
+
+          To go back, unzip the app's own release over the same folder and reload.
+
+          ### Verify (optional)
+          The ZIPs were built by GitHub Actions from the tagged commit and the app's $APP_TAG, and GitHub signed a record of that. With the GitHub CLI: \`gh attestation verify baltazar-mail-yahoo-$version-mcp.zip -R $REPO\` (or \`baltazar-mail-gmail-$version-mcp.zip\`).
+
+          NOTES
+          gh release create "$tag" dist/*.zip dist/*.zip.sha256 -R "$REPO" \
+            --title "Baltazar Mail AI access $version (experimental)" --notes-file notes.md --target "$GITHUB_SHA"

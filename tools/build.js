@@ -15,7 +15,12 @@
 // its text was last recorded (glue/watched.json) is reported, and the build goes on; when the glue
 // has been compared with it, --reviewed records the new text.
 //
-// node tools/build.js [yahoo|gmail] [--reviewed]
+// VERSION here is the app's version this repository goes with, and after a dash the number of a
+// release of this side alone (0.23.0, then 0.23.0-2). A build beside another version of the app
+// says so; --release, which the Release workflow builds with, refuses it, as it refuses a watched
+// function that has changed.
+//
+// node tools/build.js [yahoo|gmail] [--reviewed] [--release]
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
@@ -29,6 +34,9 @@ const appBuild = app.build;      // the app's own build, whatever is put in its 
 const ADDED = path.join(ROOT, "ext"), GLUE = path.join(ROOT, "glue"), WATCHED = path.join(GLUE, "watched.json");
 const PORT = 18417, SOURCE = `http://127.0.0.1:${PORT}`;
 const MARK = "---------- AI access ----------";
+const version = () => fs.readFileSync(path.join(ROOT, "VERSION"), "utf8").trim();
+const appVersion = () => fs.readFileSync(path.join(APP, "VERSION"), "utf8").trim();
+const madeFor = () => version().replace(/-\d+$/, "");
 const glued = () => fs.readdirSync(GLUE).filter(n => n !== path.basename(WATCHED)).sort();
 
 // ---------- what the glue says of the app's file ----------
@@ -113,8 +121,9 @@ function overlay(edition, dir) {
   const csp = manifest.content_security_policy, pages = csp.extension_pages.replace(/(^|;\s*)(connect-src [^;]*)/, `$1$2 ${SOURCE}`);
   if (pages === csp.extension_pages) throw new Error(`the ${edition} manifest has no connect-src to add the assistant's server to`);
   manifest.content_security_policy = { ...csp, extension_pages: pages };
-  // what the browser's list of extensions shows for the version, so the two builds tell apart
-  manifest.version_name = `${manifest.version} with AI access`;
+  // what the browser's list of extensions shows for the version, so the two builds tell apart;
+  // the version itself is the app's
+  manifest.version_name = madeFor() === manifest.version ? `${version()} with AI access` : `${manifest.version} with AI access (made for ${madeFor()})`;
   fs.writeFileSync(at, JSON.stringify(manifest, null, 2) + "\n");
   return dir;
 }
@@ -150,7 +159,10 @@ function buildForTest(edition, { plain = false } = {}) {
 }
 
 if (require.main === module) {
-  const named = process.argv.slice(2).filter(a => !a.startsWith("--"));
+  const named = process.argv.slice(2).filter(a => !a.startsWith("--")), release = process.argv.includes("--release");
+  const apart = madeFor() === appVersion() ? "" : `This repository is at ${version()}, made for Baltazar Mail ${madeFor()}; the app beside it is at ${appVersion()}.`;
+  if (release && apart) throw new Error(apart);
+  if (release && changed().length) throw new Error(`changed in the app since the glue was last compared with it: ${changed().join(", ")}`);
   if (process.argv.includes("--reviewed")) { fs.writeFileSync(WATCHED, JSON.stringify(watchedNow(), null, 2) + "\n"); console.log("recorded the watched functions as they are now"); }
   for (const edition of named.length ? named : Object.keys(app.EDITIONS)) {
     const out = build(edition);
@@ -158,6 +170,7 @@ if (require.main === module) {
   }
   const differs = changed();
   if (differs.length) console.log(`\nCHANGED IN THE APP since the glue was last compared with it: ${differs.join(", ")}.\nCompare each with the glue that follows it (glue/), run node tools/check.js, then: node tools/build.js --reviewed`);
+  if (apart) console.log(`\n${apart} Once the checks pass against it (node tools/check.js --app), set VERSION here to match.`);
 }
 
-module.exports = { build, buildForTest, overlay, changed, glued, listed, declares, functionText, app, APP, ROOT, PORT, SOURCE, MARK };
+module.exports = { build, buildForTest, overlay, changed, glued, listed, declares, functionText, version, appVersion, madeFor, app, APP, ROOT, PORT, SOURCE, MARK };

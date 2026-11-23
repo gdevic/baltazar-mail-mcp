@@ -7,12 +7,15 @@ import { createRequire } from "node:module";
 import fs from "node:fs";
 import path from "node:path";
 
-const { buildForTest, glued, listed, declares, functionText, app, ROOT, SOURCE, MARK } = createRequire(import.meta.url)("./build.js");
+const { buildForTest, glued, listed, declares, functionText, version, appVersion, madeFor, app, ROOT, SOURCE, MARK } = createRequire(import.meta.url)("./build.js");
 let fail = 0;
 const ok = (cond, what) => { if (!cond) { fail++; console.log("FAIL", what); } };
 const walk = dir => fs.readdirSync(dir, { withFileTypes: true }).flatMap(e => e.isDirectory() ? walk(path.join(dir, e.name)) : [path.join(dir, e.name)]);
 const json = f => JSON.parse(fs.readFileSync(f, "utf8"));
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+// ---------- the version: the app's, and after a dash the number of a release of this side alone ----------
+ok(/^\d+\.\d+\.\d+(-[1-9]\d*)?$/.test(version()) && madeFor() === appVersion(), `this repository's version (${version()}) is the version of the app beside it (${appVersion()})`);
 
 // ---------- the build with AI access beside the app's own ----------
 const added = fs.readdirSync(path.join(ROOT, "ext")).sort(), glue = glued();
@@ -33,7 +36,7 @@ for (const edition of Object.keys(app.EDITIONS)) {
   const rest = m => { const { content_security_policy, version_name, ...others } = m; return others; };
   ok(same(connect(mo), [...connect(mp), SOURCE]), `${edition}: the pages may reach what the app's may, and the assistant's server: ` + connect(mo).join(" "));
   ok(same(mo.content_security_policy.extension_pages.replace(` ${SOURCE}`, ""), mp.content_security_policy.extension_pages) && mo.content_security_policy.sandbox === mp.content_security_policy.sandbox, `${edition}: the rest of the Content Security Policy is the app's`);
-  ok(same(rest(mo), rest(mp)) && mo.version_name === `${mp.version} with AI access` && !("version_name" in mp), `${edition}: the manifest is otherwise the app's (its permissions, its key, its version), and says what it is`);
+  ok(same(rest(mo), rest(mp)) && mo.version === appVersion() && mo.version_name === `${version()} with AI access` && !("version_name" in mp), `${edition}: the manifest is otherwise the app's (its permissions, its key, its version), and says what it is: ${mo.version_name}`);
 }
 
 // ---------- what a piece of glue says of the app's file ----------

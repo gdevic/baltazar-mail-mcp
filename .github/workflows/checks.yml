@@ -1,0 +1,115 @@
+# The checks of AI access against the app (gdevic/baltazar-mail), which is checked out beside this
+# repository as it is on a developer's machine: this repository's own checks (the overlay, the
+# wire, the server, both editions in Playwright's Chromium against the app's mocked mailboxes),
+# and then the app's own browser suites run against the build with AI access, which tells whether
+# the glue disturbs the app. Every process of those suites loads tools/harness.js first, which
+# answers the app's test build with this repository's.
+# Runs on every push to main against the app's main, before every release against the app's tag
+# of the same version, and from the Actions tab against any branch or tag of the app.
+name: Checks
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      app_ref:
+        description: "The app's branch or tag to check against (main)"
+        required: false
+  workflow_call:
+    inputs:
+      app_ref:
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: baltazar-mail-mcp
+          persist-credentials: false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: gdevic/baltazar-mail
+          ref: ${{ inputs.app_ref || 'main' }}
+          path: baltazar-mail
+          persist-credentials: false
+
+      # The Node the app's own tests run on (its tests.yml).
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      # The app's harness loads Playwright from the app's folder; the version is the app's.
+      - name: Install Playwright and Chromium
+        working-directory: baltazar-mail
+        run: |
+          npm install --no-save --no-package-lock --no-audit --no-fund playwright@1.63.0
+          npx playwright install --with-deps chromium
+
+      - name: This repository's checks
+        working-directory: baltazar-mail-mcp
+        run: node tools/check.js
+
+      - name: The app's smoke test, with AI access
+        working-directory: baltazar-mail
+        env:
+          NODE_OPTIONS: --require ${{ github.workspace }}/baltazar-mail-mcp/tools/harness.js
+        run: node tools/smoke.js
+
+      - name: The app's Yahoo runtime test, with AI access
+        working-directory: baltazar-mail
+        env:
+          NODE_OPTIONS: --require ${{ github.workspace }}/baltazar-mail-mcp/tools/harness.js
+        run: node tools/yahoo-runtime.js
+
+      - name: The app's Gmail runtime test, with AI access
+        working-directory: baltazar-mail
+        env:
+          NODE_OPTIONS: --require ${{ github.workspace }}/baltazar-mail-mcp/tools/harness.js
+        run: node tools/gmail-runtime.js
+
+  # The app's review scenarios, the security regressions among them, in shards as the app runs them.
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: baltazar-mail-mcp
+          persist-credentials: false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: gdevic/baltazar-mail
+          ref: ${{ inputs.app_ref || 'main' }}
+          path: baltazar-mail
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      - name: Install Playwright and Chromium
+        working-directory: baltazar-mail
+        run: |
+          npm install --no-save --no-package-lock --no-audit --no-fund playwright@1.63.0
+          npx playwright install --with-deps chromium
+
+      - name: The app's review scenarios, with AI access
+        working-directory: baltazar-mail
+        env:
+          NODE_OPTIONS: --require ${{ github.workspace }}/baltazar-mail-mcp/tools/harness.js
+          SHARD: ${{ matrix.shard }}
+        run: node tools/review.js "--shard=$SHARD/4"
