@@ -153,6 +153,19 @@ async function suite(provider) {
     const labels = id => h.gmail.messages.get(id)?.labelIds || [];
     const sentCount = () => gm ? [...h.gmail.messages.values()].filter(m => m.labelIds.includes("SENT")).length : 0;
     const sentBefore = sentCount(), unreadBefore = await rows(".unread"), rowsBefore = await rows(""), inboxBefore = await count(inboxId);
+    // Yahoo's mock lists the same messages whatever was moved, and knows no folder changes: here
+    // it is told that a message moved out of Inbox is no longer listed (and is again once moved
+    // back), so a list refreshed at any moment agrees with the move, and how to make and rename a
+    // folder. Gmail's mock keeps labels and needs neither.
+    if (!gm) h.mock.handler = ({ name, envelope, top }) => {
+      const done = { responses: [{ id: top.id, httpCode: 200, response: { result: {} } }] };
+      if (name === "messages.move") for (const q of envelope?.requests || []) {
+        const to = String(q.payload?.message?.folder?.id ?? "");
+        for (const id of (decodeURIComponent(q.uri || "").match(/id:\(([^)]+)\)/)?.[1] || "").split(/[\s,]+/).filter(Boolean)) if (to === inboxId) h.goneElsewhere.delete(id); else h.goneElsewhere.add(id);
+      }
+      if (name === "folders.create") { h.folders.push({ id: "77", name: top.payload.folder.name, types: ["USER"], unread: 0, total: 0, highestModSeq: 20 }); return done; }
+      if (name === "folders.rename") { h.folders.find(f => top.uri.endsWith(`/${f.id}`)).name = top.payload.folder.name; return done; }
+    };
 
     const marked = await server.call("mark_messages", { ids: [unreadOne], read: true });
     expect(!marked.error && marked.value.read.changed.join() === unreadOne && !marked.value.read.failed.length && !("starred" in marked.value), "mark_messages marks a message read: " + marked.text);
@@ -197,12 +210,7 @@ async function suite(provider) {
     const nowhereTo = await server.call("move_messages", { ids: [mover], to: "drafts" });
     expect(nowhereTo.error && /not moved into Drafts or Sent/.test(nowhereTo.text), "Drafts is no place to move to: " + nowhereTo.text);
 
-    // folders: made and renamed, never deleted (Yahoo's mock is told how to answer the two)
-    if (!gm) h.mock.handler = ({ name, top }) => {
-      const done = { responses: [{ id: top.id, httpCode: 200, response: { result: {} } }] };
-      if (name === "folders.create") { h.folders.push({ id: "77", name: top.payload.folder.name, types: ["USER"], unread: 0, total: 0, highestModSeq: 20 }); return done; }
-      if (name === "folders.rename") { h.folders.find(f => top.uri.endsWith(`/${f.id}`)).name = top.payload.folder.name; return done; }
-    };
+    // folders: made and renamed, never deleted
     const made = await server.call("create_folder", { name: "From AI", parent: "Projects" });
     expect(!made.error && made.value.name === "Projects/From AI" && made.value.type === "" && made.value.id, "create_folder makes a folder inside another: " + made.text);
     expect(await until(async () => await page.locator(`#folder-list .folder[data-id="${made.value?.id}"]`).count() === 1), "and the folder pane shows it");
