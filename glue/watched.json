@@ -1,0 +1,15 @@
+{
+  "compose.js": {
+    "openNow": "6395ba880917c9dbbfadbcbdd4ce849f2a69514a2f10045d8df836b35a1081db",
+    "saveNow": "f037538a6e78bdf7daffbb5e1822fb5c6775fd377dab9b7e1c5fa11c5b3bcbd7"
+  },
+  "mail.js": {
+    "doSetRead": "d03a536665a8fee6cae4c244779ae4ecada9f966518ff010518b6fc05b59a9d2",
+    "doSetStarred": "cd08ceef9bea7430524717fb95895eeede2f2bbb74c93849e155e354a1c3b569",
+    "doMove": "e67f82e205c7e2267c48ba02f99ebf700adfda3b55a9448adce1ce84c6fabcd3",
+    "startCompose": "66fe1b21fdd5783526c7fa7c5ed324a324e997e36378d330b070ad4611305b5c",
+    "createFolderIn": "d9556a0488cc416abe61007793a9996e2c098732a8a1f235360060889d50a0d0",
+    "renameFolderAsk": "04f9dbcb02207058bf00c08b881daec69de37b3c4d43cdda4d9ea478161322b3",
+    "run": "160d614dd23d9a2a566a7ddd3b47e7e987b0b312562ec70410c464be6710becf"
+  }
+}

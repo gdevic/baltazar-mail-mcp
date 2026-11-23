@@ -1,0 +1,4 @@
+/* ---------- AI access ---------- */
+/* Appended to the app's mail.css by this repository's build: the section mcp.js adds to Settings. */
+#mcp-set { display: contents; }
+#mcp-code { flex: none; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 3px; padding: 1px 4px; font-family: var(--mono); font-size: .92em; }
