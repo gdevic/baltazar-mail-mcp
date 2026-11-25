@@ -27,9 +27,10 @@ It lets an AI assistant on your computer (Claude Code, or any client that speaks
 
 An assistant starts the MCP server (`server/baltazar-mail-mcp.mjs`, one file, Node 22 or later, no dependencies). The server listens on `127.0.0.1:18417`. The mail tab, once AI access is switched on in its Settings, asks the server for work and answers it. The two pair with a code that Settings shows and that never travels; every message between them is signed.
 
-The build here is an overlay. `tools/build.js` asks the app's own build for each edition, then lays three things over the result, in `dist/` here:
+The build here is an overlay. `tools/build.js` asks the app's own build for each edition, then lays four things over the result, in `dist/` here:
 
 - **`ext/`** is added: `mcp.js` (the bridge in the page) and `mcpwire.js` (pairing and signing).
+- **`server/`** is added as a folder: the assistant's server, so the extension's folder holds all that AI access needs. The manifest names nothing in it, so the browser loads nothing from it.
 - **`glue/`** is appended: each file to the app's file of the same name. Appended to a module, the glue stands inside it and uses its functions by name. That is how AI access reaches the folder pane, the undo history and the composer while the app's source knows nothing of it.
 - **The manifest** lets the pages reach the one local address, and says "with AI access" beside the version.
 
@@ -39,10 +40,10 @@ The build with AI access keeps the app's version and the extension's key, so it 
 
 Steps 1 and 2 put the extension with AI access in place of the app's own, in one of two ways.
 
-**From a release.** Each release here goes with the app's release of the same version and holds a ZIP of each edition: the app's own release ZIP with AI access laid over it, with the same version, the same key and the same folder inside.
+**From a release.** Each release here goes with the app's release of the same version and holds a ZIP of each edition: the app's own release ZIP with AI access laid over it, with the same version, the same key and the same folder inside. A ZIP is complete by itself: the server is in it, in `server/`, and nothing else has to be downloaded.
 
 1. Download `baltazar-mail-yahoo-<version>-mcp.zip` or `baltazar-mail-gmail-<version>-mcp.zip` and unzip it over the folder Baltazar Mail is loaded from, replacing the files.
-2. Click **Reload** on the extension's card in the browser's extensions page. It is the same extension, so settings, sign-in and address book stay; the card now shows the version as "<version> with AI access". Take `server/baltazar-mail-mcp.mjs` from the release's source code.
+2. Click **Reload** on the extension's card in the browser's extensions page. It is the same extension, so settings, sign-in and address book stay; the card now shows the version as "<version> with AI access".
 
 **From source.** The app's repository is expected beside this one, as `../baltazar-mail`; `BALTAZAR_MAIL_REPO` names another place.
 
@@ -52,9 +53,11 @@ Steps 1 and 2 put the extension with AI access in place of the app's own, in one
 Then, either way:
 
 3. In the mail tab: Settings, AI access, tick the box, press Copy.
-4. Run `node server/baltazar-mail-mcp.mjs setup`. It takes the code from the clipboard, saves it, and adds the server to Claude Code. Do steps 3 and 4 once for each mailbox.
+4. In the folder the extension is loaded from, run `node server/baltazar-mail-mcp.mjs setup`. It takes the code from the clipboard, saves it, and adds the server to Claude Code. Do steps 3 and 4 once for each mailbox.
 
 `node server/baltazar-mail-mcp.mjs status` says what is set up and which mailboxes answer; `remove` takes the server out of Claude Code and forgets the codes. The codes are kept in `%APPDATA%\baltazar-mail\pairing-codes` (`~/.config/baltazar-mail/` elsewhere).
+
+Each edition's folder holds the same server, and one server works with both mailboxes. Claude Code starts the copy `setup` was last run from, by its path: after moving or renaming that folder, run `setup` again.
 
 The mail tab must be open. With both mailboxes connected, a tool call names one with `account` (`yahoo`, `gmail`, or the address).
 

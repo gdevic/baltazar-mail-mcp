@@ -3,11 +3,13 @@
 // result, into dist/ here. The app's repository is read and never written: its own build is asked
 // for a copy in out/ here, and the overlay is made on that copy.
 //
-// The overlay is three things. The files of ext/ are added. Each file of glue/ is appended to the
-// app's file of the same name: appended to a module, the glue stands inside it and uses the
-// module's own functions by name, which is how AI access reaches the folder pane, the undo history
-// and the composer without the app's source knowing of it. And the manifest lets the pages reach
-// the one address on this computer where the assistant's server listens.
+// The overlay is four things. The files of ext/ are added. The folder server/ is added whole, so
+// that a build holds the assistant's server too and all that AI access needs is in the one folder;
+// the manifest names nothing in it, so the browser loads nothing from it. Each file of glue/ is
+// appended to the app's file of the same name: appended to a module, the glue stands inside it and
+// uses the module's own functions by name, which is how AI access reaches the folder pane, the
+// undo history and the composer without the app's source knowing of it. And the manifest lets the
+// pages reach the one address on this computer where the assistant's server listens.
 //
 // A piece of glue says in its first lines which names of the app's file it uses ("uses:") and
 // which of its functions it follows closely enough that a change to one should be looked at
@@ -31,7 +33,7 @@ const APP = path.resolve(process.env.BALTAZAR_MAIL_REPO || path.join(ROOT, "..",
 if (!fs.existsSync(path.join(APP, "tools", "build.js"))) throw new Error(`Baltazar Mail's repository was not found at ${APP}. Put it beside this one, or name it in BALTAZAR_MAIL_REPO.`);
 const app = require(path.join(APP, "tools", "build.js"));
 const appBuild = app.build;      // the app's own build, whatever is put in its place later (tools/harness.js)
-const ADDED = path.join(ROOT, "ext"), GLUE = path.join(ROOT, "glue"), WATCHED = path.join(GLUE, "watched.json");
+const ADDED = path.join(ROOT, "ext"), SERVER = path.join(ROOT, "server"), GLUE = path.join(ROOT, "glue"), WATCHED = path.join(GLUE, "watched.json");
 const PORT = 18417, SOURCE = `http://127.0.0.1:${PORT}`;
 const MARK = "---------- AI access ----------";
 const version = () => fs.readFileSync(path.join(ROOT, "VERSION"), "utf8").trim();
@@ -102,6 +104,10 @@ function overlay(edition, dir) {
     if (fs.existsSync(path.join(APP, "ext", name)) || fs.existsSync(path.join(APP, edition, name))) throw new Error(`the app has a file named ${name} of its own`);
     fs.copyFileSync(path.join(ADDED, name), path.join(dir, name));
   }
+  // the assistant's server, in a folder of its own, as it is in this repository
+  const served = path.basename(SERVER);
+  if (fs.existsSync(path.join(APP, "ext", served)) || fs.existsSync(path.join(APP, edition, served))) throw new Error(`the app has a ${served} of its own`);
+  fs.cpSync(SERVER, path.join(dir, served), { recursive: true });
   for (const name of glued()) {
     const file = path.join(dir, name);
     if (!fs.existsSync(file)) throw new Error(`glue/${name} has no file of the app to go with`);

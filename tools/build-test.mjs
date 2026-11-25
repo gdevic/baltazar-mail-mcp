@@ -1,9 +1,11 @@
 // The overlay (tools/build.js): the build with AI access is the app's own build with this
-// repository's files added, its glue appended to the files it names, and one address added to
-// what the pages may reach, and nothing else of the app's build is touched; how the build reads
-// what a piece of glue uses and watches of the app's file.
+// repository's files added (the page's side of AI access, and the assistant's server in a folder
+// of its own, which runs from there), its glue appended to the files it names, and one address
+// added to what the pages may reach, and nothing else of the app's build is touched; how the
+// build reads what a piece of glue uses and watches of the app's file.
 // node tools/build-test.mjs
 import { createRequire } from "node:module";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -18,7 +20,11 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 ok(/^\d+\.\d+\.\d+(-[1-9]\d*)?$/.test(version()) && madeFor() === appVersion(), `this repository's version (${version()}) is the version of the app beside it (${appVersion()})`);
 
 // ---------- the build with AI access beside the app's own ----------
-const added = fs.readdirSync(path.join(ROOT, "ext")).sort(), glue = glued();
+// What the build adds, each file as the build names it, with where this repository has it.
+const SERVER = "server/baltazar-mail-mcp.mjs";
+const from = (dir, to = "") => fs.readdirSync(path.join(ROOT, dir)).map(f => [to + f, path.join(ROOT, dir, f)]);
+const sources = Object.fromEntries([...from("ext"), ...from("server", "server/")]), added = Object.keys(sources).sort(), glue = glued();
+ok(added.includes(SERVER), `the assistant's server is among what the build adds: ${added.join(", ")}`);
 for (const edition of Object.keys(app.EDITIONS)) {
   const plain = buildForTest(edition, { plain: true }), ours = buildForTest(edition);
   const files = dir => walk(dir).map(f => path.relative(dir, f).replaceAll("\\", "/")).sort();
@@ -30,8 +36,11 @@ for (const edition of Object.keys(app.EDITIONS)) {
       ok(now.startsWith(was) && now.split(MARK).length === 2 && now.slice(was.length).trimStart().startsWith(f.endsWith(".css") ? "/* " + MARK : "// " + MARK), `${edition}: ${f} is the app's own, whole, with the glue after it`);
     } else if (f !== "manifest.json") ok(a.equals(b), `${edition}: ${f} is the app's own, byte for byte`);
   }
-  for (const f of added) ok(fs.readFileSync(path.join(ours, f)).equals(fs.readFileSync(path.join(ROOT, "ext", f))), `${edition}: ${f} is this repository's`);
+  for (const f of added) ok(fs.readFileSync(path.join(ours, f)).equals(fs.readFileSync(sources[f])), `${edition}: ${f} is this repository's`);
+  const helped = spawnSync(process.execPath, [path.join(ours, SERVER), "help"], { encoding: "utf8", input: "", timeout: 20000 });
+  ok(helped.status === 0 && / setup /.test(helped.stdout), `${edition}: the server runs from the build's own folder: ` + `${helped.stdout}${helped.stderr}`.slice(0, 200));
   const mp = json(path.join(plain, "manifest.json")), mo = json(path.join(ours, "manifest.json"));
+  ok(!JSON.stringify(mo).includes("server/"), `${edition}: the manifest names nothing in the server's folder`);
   const connect = m => m.content_security_policy.extension_pages.match(/connect-src ([^;]*)/)[1].split(" ");
   const rest = m => { const { content_security_policy, version_name, ...others } = m; return others; };
   ok(same(connect(mo), [...connect(mp), SOURCE]), `${edition}: the pages may reach what the app's may, and the assistant's server: ` + connect(mo).join(" "));

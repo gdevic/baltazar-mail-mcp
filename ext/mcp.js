@@ -1,8 +1,8 @@
 // AI access: lets an AI assistant on the same computer work with this mailbox through the open
-// mail tab. The assistant starts an MCP server (server/baltazar-mail-mcp.mjs of this repository),
-// which listens on one port of the loopback address; this module, once the user switches AI
-// access on in Settings, asks that server for work, does it in the page, and answers. Pairing and
-// the signing of every message are in mcpwire.js.
+// mail tab. The assistant starts an MCP server (server/baltazar-mail-mcp.mjs, which a build
+// carries in the extension's own folder), which listens on one port of the loopback address; this
+// module, once the user switches AI access on in Settings, asks that server for work, does it in
+// the page, and answers. Pairing and the signing of every message are in mcpwire.js.
 //
 // The app's own source knows nothing of this module. The build lays it over the app's (see
 // tools/build.js): glue appended to mail.js and compose.js hands it what it needs of them (init,

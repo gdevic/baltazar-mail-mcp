@@ -1,8 +1,9 @@
 # Publishes a GitHub release whose assets are ZIPs of the two extensions of Baltazar Mail with AI
 # access laid over them: each is the app's own release ZIP of the same version (the same build of
 # the same tagged commit, the same key, the same folder inside) plus what this repository adds, so
-# it unzips over the app's folder and the browser reloads it as the same extension. No package for
-# a browser store is made.
+# it unzips over the app's folder and the browser reloads it as the same extension. What is added
+# includes the assistant's server (server/ in the folder), so a ZIP holds all that AI access needs.
+# No package for a browser store is made.
 # Runs from the Actions tab (Run workflow) with a tag name, from main. The tag is v and the
 # version in VERSION: the app's version this repository goes with (v0.23.0), and after a dash the
 # number of a release of this side alone (v0.23.0-2). The app must have been released first: its
@@ -91,15 +92,18 @@ jobs:
           # tools/build.js asks the app's build, at the app's tag, for each edition and lays this
           # repository over it. As in the app's own release, no local.json is here, so a ZIP
           # carries what the app's ZIP carries and no more; the folder inside keeps the app's
-          # name, and the app's licence goes in as it does there.
+          # name, and the app's licence goes in as it does there. Each ZIP must hold the
+          # assistant's server, the file of this commit, or it is not published.
           node tools/build.js --release
           for name in baltazar-mail-yahoo baltazar-mail-gmail; do
             find "dist/$name" -name '.DS_Store' -delete
             cp ../baltazar-mail/LICENSE "dist/$name/LICENSE"
             if grep -q '"oauth2"' "dist/$name/manifest.json"; then echo "the $name manifest carries an OAuth client"; exit 1; fi
+            if ! cmp -s server/baltazar-mail-mcp.mjs "dist/$name/server/baltazar-mail-mcp.mjs"; then echo "the $name build does not hold the server of this commit"; exit 1; fi
             zipname="$name-$VERSION-mcp.zip"
             (cd dist && zip -qr9 "$zipname" "$name")
             unzip -l "dist/$zipname" | grep -q " $name/manifest.json$"
+            unzip -l "dist/$zipname" | grep -q " $name/server/baltazar-mail-mcp.mjs$"
             (cd dist && sha256sum "$zipname" > "$zipname.sha256")
           done
 
@@ -127,11 +131,11 @@ jobs:
           This adds AI access (MCP) to Baltazar Mail $app. It is an experiment, for people who know exactly what they are doing and who take full responsibility: once an AI assistant is attached to a mailbox, anything can happen. Read the [README](https://github.com/$REPO#readme) first. Baltazar Mail itself has no MCP code of any kind and is not affected by anything here.
 
           ### What is here
-          **baltazar-mail-yahoo-$version-mcp.zip** and **baltazar-mail-gmail-$version-mcp.zip** are the two extensions of [Baltazar Mail $app](https://github.com/gdevic/baltazar-mail/releases/tag/$APP_TAG) with AI access laid over them: the same version, the same key, the same folder inside. Every other file in them is the app's own, byte for byte.
+          **baltazar-mail-yahoo-$version-mcp.zip** and **baltazar-mail-gmail-$version-mcp.zip** are the two extensions of [Baltazar Mail $app](https://github.com/gdevic/baltazar-mail/releases/tag/$APP_TAG) with AI access laid over them: the same version, the same key, the same folder inside. Each holds all that AI access needs, the assistant's server included (\`server/baltazar-mail-mcp.mjs\`, the same file in both), so one edition alone is enough. Every other file in them is the app's own, byte for byte.
 
           ### Install
           1. Unzip over the folder Baltazar Mail $app is loaded from, replacing the files (the ZIP holds one folder, \`baltazar-mail-yahoo\` or \`baltazar-mail-gmail\`, as the app's ZIP does), then click **Reload** on the extension's card in the extensions page. It is the same extension: its settings, sign-in and address book stay. The card then shows the version as "$version with AI access".
-          2. Take \`server/baltazar-mail-mcp.mjs\` from the source code of this release, and follow the README from step 3 of "Use".
+          2. In the mail tab open Settings, tick the box under AI access and press **Copy**. Then, in that same folder, run \`node server/baltazar-mail-mcp.mjs setup\` (Node 22 or later): it takes the code from the clipboard, saves it and adds the server to Claude Code. The README has the rest under "Use".
 
           To go back, unzip the app's own release over the same folder and reload.
 
