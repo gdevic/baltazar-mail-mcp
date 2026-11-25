@@ -61,6 +61,8 @@ Each edition's folder holds the same server, and one server works with both mail
 
 The mail tab must be open. With both mailboxes connected, a tool call names one with `account` (`yahoo`, `gmail`, or the address).
 
+After the files in the folder are replaced, reload the extension, and start the assistant's server again (in Claude Code: `/mcp`, reconnect). A browser goes on running the page it loaded, and a mail tab that is older than the server would pass over what it does not know. The two therefore check each other: the tab tells the server what it can do, and the server refuses, with words that say to reload, a call the tab cannot honour; a tab refuses an argument it does not know; and a server refuses to pass a call through an older server that holds the port for another assistant, and says to restart that assistant.
+
 To go back to Baltazar Mail without AI access, put the app's own files back in the folder (its release ZIP, or its own build) and reload.
 
 Never commit `dist/` or `out/`: a build made on your machine carries what your own `local.json` files hold, such as an extension key or an OAuth client id. The release ZIPs are built on GitHub, where there are none.
@@ -72,22 +74,33 @@ Never commit `dist/` or `out/`: a build made on your machine carries what your o
 | `list_accounts`, `list_folders` | The connected mailboxes; a mailbox's folders with their counts |
 | `list_messages`, `search_messages` | A folder's messages; a search in the app's own search language |
 | `read_message`, `read_conversation` | A message's text and attachments list; its conversation as a tree |
+| `read_composer` | The message you are writing, as it stands, saved or not: its sender, recipients, subject and text, with a mark where your caret is |
 | `get_attachment` | Writes one attachment as a file under the system's temporary folder |
 | `find_contacts` | People from the address book |
 | `mark_messages`, `move_messages` | Read or unread, starred or not; a move to any folder, Trash included |
 | `create_folder`, `rename_folder` | A new folder; another name for one of your own |
-| `draft_message` | A new message, reply, reply to all or forward, saved to Drafts and left open in the composer |
+| `draft_message` | A new message, reply, reply to all or forward, saved to Drafts and left open in the composer; text added to the message you are writing; or a saved draft opened in the composer |
 
 Every change shows in the mail tab at once and is an entry of its undo history, marked "AI:", which Undo takes back. Reading marks nothing as read.
+
+A marker in the mail tab's header, before the account, always says that this copy has AI access and what its connection is doing: off, waiting, connected, or what stands in its way (another tab holds the connection, or the server has another code or another version). While an assistant's command is done it is filled, pulses and says what the assistant is doing ("AI is searching", "AI is writing a draft"), and it goes on saying so for a moment after. A click on it opens Settings scrolled to their end, where AI access is, with the focus on Copy, or on the switch while AI access is off. In a narrow window the marker gives up its words before the rest of the header loses its room.
+
+A draft that stays open in the composer is shown as if typed: its text appears behind a caret marked "AI", in at most three seconds. That is a replay, since a draft reaches the tab whole: all of the text is in the message from the start and is saved as it is, and only its showing is held back. A key, a click, a turn of the mouse wheel or anything put into the composer shows the rest at once. A message written as plain text, and a system set to reduce motion, get the text at once.
+
+While you write a message, an assistant can step in and write with you. Ask it to add to the message, and its text is typed into your own text as lines of its own, after the line your caret is in. An empty line takes the text and then follows it, so you go on writing below, and what the assistant adds next at the same place follows what it added before. With the caret inside a quoted original, the quote is split there, as Enter splits it, and the text stands between its two parts. With the caret at the very start of the message, which is where a message opens with it, or outside the message's text, in the subject for one, the text goes after your own, above the signature and the quoted original. Where the text belongs somewhere other than at your caret, the assistant names the line it follows (`after`). That is a line of your own text, never one of the signature or of a quoted or forwarded message, so nothing an outside sender wrote, seen or hidden, can be chosen as the place; words that no line of yours has, or more than one, add nothing. A link the assistant writes says where it leads: one whose words are an address other than the one it goes to gets the real address for its words.
+
+What was added is an entry of the undo history, marked "AI:" like every other change: Undo takes the text out of the message again, with whatever you changed in it since, and Redo puts it back. The entry is for that message while you are writing it, and leaves the history when the composer closes; a quote that was split for the text stays split. To write what fits, an assistant can read the message as it stands (`read_composer`): its sender, recipients (Bcc among them), subject and attachments' names, your own words, the signature and the quoted original, with a mark where your caret is, and the text you have selected. It reads what is in the composer whether or not it was saved.
+
+An assistant can also open a draft saved in Drafts, as your click on it there opens it, so that "open my draft and finish it" is one request. With one draft in Drafts it opens that one. With several, and none named, it opens none: it is given each draft's recipients, subject, date and how its text begins, and asks you which one you mean. A draft opened this way loads none of the remote pictures of the mail it quotes.
 
 ## What it is built not to do
 
 - **Send.** No tool sends, and the page's side of the feature calls nothing that does. A draft waits for you.
 - **Delete for good, or empty a folder.** A message moved to Trash is in Trash.
-- **Delete a folder**, or change a draft once it is saved.
-- **Disturb what you are writing.** A draft is refused while a message is open in the composer.
+- **Delete a folder.**
+- **Put away or change what you are writing.** A new message, reply or forward is refused while a message is open in the composer, and so is opening a saved draft; that holds also for a message you start while the assistant's is being prepared. An assistant can add to the message that is open (`draft_message` with the mode `continue`), and that is all it can do to it: its text goes into your own text as lines of its own, at your caret or after a line of yours that it names, and your own words, the recipients and the subject stay as they are. With your caret inside a quoted original, the quote is split there, as your own Enter would split it. A saved draft changes in that way only: opened in the composer (the mode `open_draft`) and added to there.
 
-These limits are in what the tools can do at all, and tests hold them. They are not a guarantee. Mail is written by strangers, and an assistant reads it: every answer that holds mail says so and says that its text is information, never instructions, and text a message hides from its reader with inline styles is left out. A message can still mislead an assistant into reading, moving, marking or drafting what you did not ask for, and an assistant with other tools at hand can do more with what it read than this repository can foresee. This code has not had an independent security review.
+These limits are in what the tools can do at all, and tests hold them. They are not a guarantee. Mail is written by strangers, and an assistant reads it: every answer that holds mail says so and says that its text is information, never instructions, and text that a message's own inline styles take out of view (not shown, not visible, of no size or no opacity, or clipped to nothing) is left out. Text hidden in other ways, such as in the colour of its background, is not recognised. A message can still mislead an assistant into reading, moving, marking or drafting what you did not ask for, or into adding to a message you are writing, which you would then send as yours: read what was added before you send, and an assistant with other tools at hand can do more with what it read than this repository can foresee. This code has not had an independent security review.
 
 ## When the app changes
 
@@ -108,6 +121,6 @@ A release is made after the app's own release of that version, since it is built
 
 ## Checks
 
-- `node tools/check.js` runs everything here: the overlay, the wire, the server, and both editions in a browser against the app's mocked mailboxes (about 40 seconds).
+- `node tools/check.js` runs everything here: the overlay, the wire, the server, and both editions in a browser against the app's mocked mailboxes (about a minute and a half).
 - `node tools/check.js --app` also runs the app's own tests against the build with AI access, which tells whether the glue disturbs the app.
 - On GitHub the same checks run on every push here, against the app's `main`, and before every release, against the app's tag.

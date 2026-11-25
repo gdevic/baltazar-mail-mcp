@@ -1,4 +1,31 @@
 /* ---------- AI access ---------- */
-/* Appended to the app's mail.css by this repository's build: the section mcp.js adds to Settings. */
+/* Appended to the app's mail.css by this repository's build: the section mcp.js adds to Settings,
+   and the marker it adds to the header, which is dashed while AI access is off, has its dot filled
+   while an assistant is connected, and is filled itself, and pulses, while a command is done. The
+   marker takes the header's free space on its left, as the account does without it, and in a
+   narrow window gives up its words before the header's other parts lose their room. */
+#mcp-mark + #account { margin-left: 0; }
+#mcp-mark { margin-left: auto; flex: 0 1 auto; min-width: 0; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; border: 1px solid var(--line); background: transparent; color: var(--fg2); border-radius: 10px; padding: 0 9px 0 7px; font-size: calc(11 * var(--fu)); line-height: 17px; }
+#mcp-mark i { flex: none; width: 7px; height: 7px; border-radius: 50%; border: 1px solid currentColor; }
+#mcp-mark span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#mcp-mark[data-phase="off"] { border-style: dashed; color: var(--fg3); }
+#mcp-mark:hover { border-color: var(--accent); color: var(--fg); }
+#mcp-mark[data-phase="connected"] { border-color: var(--accent); color: var(--fg); }
+#mcp-mark[data-phase="connected"] i { background: var(--accent); border-color: var(--accent); }
+#mcp-mark[data-phase="working"] { border-color: var(--accent); background: var(--accent); color: var(--on-accent); animation: mcp-ring 1.2s ease-out infinite; }
+#mcp-mark[data-phase="working"] i { background: currentColor; animation: mcp-dot 1.2s ease-in-out infinite; }
+@keyframes mcp-ring { from { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 70%, transparent); } to { box-shadow: 0 0 0 7px transparent; } }
+@keyframes mcp-dot { 50% { opacity: .3; transform: scale(.6); } }
+@media (prefers-reduced-motion: reduce) { #mcp-mark, #mcp-mark i { animation: none !important; } }
+/* An assistant's draft shown as if typed (mcp.js, the replay): the text not yet "typed" has no
+   colour, and a caret marked AI stands where the typing has come to. The caret is in the editor's
+   scrolling box, outside the message; its mark turns to the left near the box's right edge. */
+::highlight(mcp-unwritten) { color: transparent; }
+#mcp-caret { position: absolute; z-index: 5; width: 2px; background: var(--accent); pointer-events: none; }
+#mcp-caret b { position: absolute; left: 0; bottom: 100%; padding: 0 4px; border-radius: 3px 3px 3px 0; background: var(--accent); color: var(--on-accent); font: 600 9px/12px var(--font); letter-spacing: .5px; white-space: nowrap; }
+#mcp-caret.flip b { left: auto; right: 0; border-radius: 3px 3px 0 3px; }
 #mcp-set { display: contents; }
+/* The marker's click puts the focus on Copy, or on the switch while AI access is off; a browser
+   draws no ring for a focus that a click moved, so these two show theirs whenever they have it. */
+#mcp-copy:focus, #mcp-on:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
 #mcp-code { flex: none; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 3px; padding: 1px 4px; font-family: var(--mono); font-size: .92em; }

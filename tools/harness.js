@@ -20,8 +20,9 @@ const harness = require(path.join(APP, "tools", "harness.js"));
 // pairing code. It listens on a free port of its own, so a server that an assistant on this
 // machine runs is left alone; what the page asks of the port the extension knows is passed on to
 // it, and noted (asked: the paths). rpc and call speak to it as the assistant does: a tool's
-// answer is JSON (value), after a line about its source when it holds mail, and after it the text
-// given as it is (body: a message's, a small attachment's); an error is words (text).
+// answer is JSON (value), after a line of the server's own words where it has any and a line
+// about its source when it holds mail, and after it the text given as it is (body: a message's,
+// a small attachment's); an error is words (text).
 async function mcpServer(h, code, env = {}) {
   const port = await new Promise(done => { const s = net.createServer(); s.listen(0, "127.0.0.1", () => { const p = s.address().port; s.close(() => done(p)); }); });
   const child = spawn(process.execPath, [path.join(ROOT, "server", "baltazar-mail-mcp.mjs")], { stdio: ["pipe", "pipe", "pipe"],
@@ -44,7 +45,8 @@ async function mcpServer(h, code, env = {}) {
   const rpc = (method, params) => new Promise(done => { const mine = ++id; waiting.set(mine, done); child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: mine, method, params }) + "\n"); });
   const call = async (name, args = {}) => {
     const r = (await rpc("tools/call", { name, arguments: args })).result, text = r.content[0].text;
-    let value; try { value = JSON.parse(/^[[{"]/.test(text) ? text : text.slice(text.indexOf("\n") + 1)); } catch { /* words */ }
+    const at = text.search(/^[[{"]/m);
+    let value; try { value = JSON.parse(at < 0 ? text : text.slice(at)); } catch { /* words */ }
     return { error: !!r.isError, text, value, body: r.content[1]?.text ?? "" };
   };
   const stop = async () => { await h.ctx.unroute(own + "**", handler).catch(() => {}); child.stdin.end(); await new Promise(done => { child.once("exit", done); setTimeout(() => { child.kill(); done(); }, 3000); }); };

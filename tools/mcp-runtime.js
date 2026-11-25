@@ -1,13 +1,19 @@
 // Runtime test of AI access: each edition's extension, built with the overlay, in Chromium against
 // its mocked mail service, with the real MCP server (server/baltazar-mail-mcp.mjs) beside it,
-// spoken to as an assistant speaks to it. Nothing is asked of this computer until AI access is switched on in
-// Settings; switched on, the tab pairs with the server by the code Settings shows and answers the
-// assistant's tools. Reading (lists, a search, a message, its conversation, an attachment) leaves
-// the list and the reader as they are and marks nothing read, and gives an assistant no text that
-// a message hides from its reader. A change (read, starred, a move, a folder) is made as the app's
+// spoken to as an assistant speaks to it. Nothing is asked of this computer until AI access is
+// switched on in Settings; switched on, the tab pairs with the server by the code Settings shows
+// and answers the assistant's tools. A marker in the header says all along that this copy has AI
+// access, what its connection is doing and, while a command is done, what the assistant is
+// doing. Reading (lists, a search, a message, its conversation, an attachment) leaves the list
+// and the reader as they are and marks nothing read, and gives an assistant no text that a
+// message hides from its reader. A change (read, starred, a move, a folder) is made as the app's
 // own action makes it: it shows at once, is an entry of the undo history marked "AI:", and Undo
-// takes it back. A draft is written in the app's composer and saved; nothing is ever sent, and
-// nothing deleted for good.
+// takes it back. A draft is written in the app's composer and saved, and where it stays open what
+// the assistant wrote is shown as if typed, with all of it in the message from the start. The
+// message the user is writing can be read as it stands and added to, in the user's own text and
+// nowhere else, which Undo takes back too; a saved draft is opened as the user's click opens it,
+// and with several the user is to be asked which. Nothing is ever sent, and nothing deleted for
+// good.
 // node tools/mcp-runtime.js [yahoo|gmail]
 const fs = require("fs");
 const os = require("os");
@@ -39,6 +45,9 @@ async function suite(provider) {
     if (show === await page.locator("#settings").isVisible()) return;
     if (show) { await page.locator("#list").focus(); await page.keyboard.press(","); } else await page.click("#settings-close");
   };
+  // the marker in the header: its state, and its words
+  const mark = () => page.locator("#mcp-mark").evaluate(m => `${m.dataset.phase}: ${m.textContent}`);
+  const marks = state => page.waitForSelector(`#mcp-mark[data-phase="${state}"]`, { timeout: 15000 }).catch(() => {});
   const typeCode = async c => { await page.locator("#mcp-code").fill(c); await page.locator("#mcp-code").dispatchEvent("change"); };
   let server = null;
   try {
@@ -47,7 +56,15 @@ async function suite(provider) {
     await page.waitForSelector("#rows .row", { timeout: 20000 });
 
     // ---------- off: nothing is asked of this computer ----------
-    await settings(true);
+    await page.waitForSelector("#mcp-mark", { timeout: 5000 });
+    expect(await mark() === "off: AI access: off" && await page.locator("#top #mcp-mark").isVisible(), "the header says that this copy has AI access, and that it is off: " + await mark());
+    await page.click("#mcp-mark");
+    const atEnd = () => page.evaluate(() => { const b = document.getElementById("settings-box"); return `${(b.scrollTop + b.clientHeight) >= (b.scrollHeight - 1)} ${document.activeElement.id}`; });
+    // Settings go on filling for a moment after they open: the end is in view once they have
+    const settles = want => page.waitForFunction(w => { const b = document.getElementById("settings-box"); return `${(b.scrollTop + b.clientHeight) >= (b.scrollHeight - 1)} ${document.activeElement.id}` === w; }, want, { timeout: 5000 }).catch(() => {});
+    await settles("true mcp-on");
+    await page.waitForTimeout(900);
+    expect(await page.locator("#settings").isVisible() && await atEnd() === "true mcp-on", "a click on the marker opens Settings at their end, where AI access is, on its switch while it is off: " + await atEnd());
     await page.waitForSelector("#mcp-on", { timeout: 5000 });
     expect(!(await page.locator("#mcp-on").isChecked()) && !(await page.locator("#mcp-row").isVisible()), "AI access is off at first, and its row is not shown");
     await page.waitForTimeout(1500);
@@ -60,6 +77,7 @@ async function suite(provider) {
     expect(/^[0-9a-f]{32}$/.test(code), "switching it on makes a pairing code and shows it: " + code);
     await says("Waiting for the assistant's server.");
     expect(await said() === "Waiting for the assistant's server.", "with no server it says that it waits: " + await said());
+    expect(await mark() === "waiting: AI access: waiting", "and so does the marker: " + await mark());
     await page.waitForTimeout(500);
     expect(unexpectedHosts.has("127.0.0.1"), "and it has looked for the server");
     unexpectedHosts.delete("127.0.0.1");
@@ -71,9 +89,15 @@ async function suite(provider) {
     await settings(false); await settings(true);           // opening Settings looks for the server at once
     await says("Connected.");
     expect(await said() === "Connected.", "with the server there it says Connected: " + await said());
+    expect(await mark() === "connected: AI access: connected", "and so does the marker: " + await mark());
     const accounts = await server.call("list_accounts");
     expect(!accounts.error && accounts.value?.length === 1 && accounts.value[0].provider === provider && /@/.test(accounts.value[0].account), "the assistant sees this mailbox: " + accounts.text);
+    // what the marker says from here on, each time it changes
+    await page.evaluate(() => { const m = document.getElementById("mcp-mark"); window.markSaid = []; new MutationObserver(() => window.markSaid.push(`${m.dataset.phase}: ${m.textContent}`)).observe(m, { attributes: true, childList: true, subtree: true }); });
     const folders = await server.call("list_folders");
+    expect((await page.evaluate(() => window.markSaid)).includes("working: AI is listing folders"), "while the assistant's command is done the marker says what the assistant is doing: " + JSON.stringify(await page.evaluate(() => window.markSaid)));
+    await marks("connected");
+    expect(await mark() === "connected: AI access: connected", "and a moment after it says Connected again: " + await mark());
     const inbox = folders.value?.find(f => f.type === "inbox");
     expect(!folders.error && inbox && inbox.name === "Inbox" && Number.isInteger(inbox.unread) && Number.isInteger(inbox.total), "list_folders gives the folders with their counts: " + folders.text.slice(0, 300));
     expect(folders.value?.some(f => f.type === "trash") && folders.value?.some(f => f.type === "") && !folders.value?.some(f => !f.id || !f.name),
@@ -228,9 +252,17 @@ async function suite(provider) {
     const saves = () => gm ? h.gmail.drafts.length : h.calls.filter(c => c.envelope?.requests?.[0]?.id === "SaveMessage").length;
     const lastSave = () => h.calls.filter(c => c.envelope?.requests?.[0]?.id === "SaveMessage").at(-1)?.envelope.requests[0].payloadParts[0].payload;
     const savesBefore = saves(), picturesBefore = pictures();
+    // the replay: how often the caret marked AI was put into the editor's box, and whether text of the message was held back from view
+    await page.evaluate(() => {
+      window.replays = { carets: 0, heldBack: false };
+      new MutationObserver(list => { if (list.some(m => [...m.addedNodes].some(n => n.id === "mcp-caret"))) { window.replays.carets++; window.replays.heldBack ||= CSS.highlights.has("mcp-unwritten"); } }).observe(document.getElementById("c-body"), { childList: true });
+    });
+    const replays = () => page.evaluate(() => window.replays);
     const reply = await server.call("draft_message", { mode: "reply", id: withFiles, body: "Thanks for the plan.\nSee you <soon> & well." });
     expect(!reply.error && reply.value.id && reply.value.opened === true && saves() === savesBefore + 1, "draft_message saves a reply to Drafts: " + reply.text);
     const editor = await page.locator("#c-editor").evaluate(e => ({ text: e.innerText, sig: !!e.querySelector(".ymsig"), quote: !!e.querySelector(".ymq blockquote"), first: e.firstElementChild?.textContent, tags: e.querySelectorAll("soon").length }));
+    expect((await replays()).carets === 1 && (await replays()).heldBack, "what the assistant wrote is shown as if typed, behind a caret marked AI: " + JSON.stringify(await replays()));
+    expect(await until(async () => !(await page.locator("#mcp-caret").count()) && !(await page.evaluate(() => CSS.highlights.has("mcp-unwritten")))), "and the typing ends by itself, with all the text shown");
     expect(await composing() && /^Re: Subject .*3$/.test(await page.locator("#c-subject").inputValue()) && (await page.locator("#c-to").textContent()).includes("s3@x.com"),
       "the composer is open on it, with the recipients and subject a reply has: " + await page.locator("#c-subject").inputValue());
     expect(editor.first === "Thanks for the plan." && editor.text.includes("See you <soon> & well.") && editor.tags === 0 && editor.sig && editor.quote && editor.text.indexOf("Thanks") < editor.text.indexOf("sig"),
@@ -245,6 +277,7 @@ async function suite(provider) {
     const fresh = await server.call("draft_message", { to: ["Ana Example <ana@example.com>", "bo@example.com"], cc: ["c@example.com"], subject: "Lunch", html: true, open: false,
       body: '<p>Hello <b>there</b></p><img src="https://evil.example/x.png" onerror="x()"><script>bad()</script><a href="javascript:bad()">j</a> <a href="https://ok.example/">ok</a><p style="position:fixed">styled</p>' });
     expect(!fresh.error && fresh.value.id && fresh.value.opened === false && !(await composing()) && saves() === savesBefore + 2, "a new message can be saved without staying open: " + fresh.text);
+    expect((await replays()).carets === 1, "and one that does not stay open is not shown as typed: " + JSON.stringify(await replays()));
     const savedHtml = gm ? (await server.call("read_message", { id: fresh.value?.id, html: true })).body : lastSave().simpleBody.html;
     expect(savedHtml.includes("<b>there</b>") && savedHtml.includes("https://ok.example/") && savedHtml.includes("styled") && !/evil\.example|<script|javascript:|<img|position/i.test(savedHtml), "the assistant's HTML keeps its words, emphasis and links, and nothing that loads or runs: " + savedHtml.slice(0, 300));
     if (!gm) expect(lastSave().message.headers.to.map(a => a.email).join() === "ana@example.com,bo@example.com" && lastSave().message.headers.to[0].name === "Ana Example" && lastSave().message.headers.cc[0].email === "c@example.com" && lastSave().message.headers.subject === "Lunch",
@@ -254,14 +287,98 @@ async function suite(provider) {
     if (!gm) expect(/^Fwd: Subject/.test(lastSave().message.headers.subject) && lastSave().message.attachments.some(a => a.messageReference?.id === withFiles) && lastSave().simpleBody.html.includes("Forwarded message"), "with the original and its files");
     const badTo = await server.call("draft_message", { to: ["not an address"], body: "x" });
     expect(badTo.error && /Not an address/.test(badTo.text) && !(await composing()) && saves() === savesBefore + 3, "what is not an address is refused before anything opens: " + badTo.text);
-    expect((await server.call("draft_message", { mode: "reply_all", body: "x" })).error && (await server.call("draft_message", { mode: "shout", body: "x" })).error && (await server.call("draft_message", {})).error, "a reply needs its message, and a mode is one of the four");
+    expect((await server.call("draft_message", { mode: "reply_all", body: "x" })).error && (await server.call("draft_message", { mode: "shout", body: "x" })).error && (await server.call("draft_message", {})).error, "a reply needs its message, and a mode is one of those there are");
+
+    // ---------- continue: added to the message the user is writing, where the caret is ----------
+    const noneOpen = await server.call("draft_message", { mode: "continue", body: "x" });
+    expect(noneOpen.error && /No message is being written/.test(noneOpen.text), "with no message open there is nothing to continue: " + noneOpen.text);
+    const closed = await server.call("read_composer");
+    expect(!closed.error && closed.value.open === false && closed.body === "", "nor one to read: " + closed.text);
+    await page.click("#compose-btn");
+    await until(composing);
+    // the user writes two lines at the top, and puts the caret at the end of the first
+    const caretAtTop = () => page.locator("#c-editor").evaluate(e => { e.focus(); getSelection().collapse(e.firstChild, 0); });
+    const caretAfter = words => page.locator("#c-editor").evaluate((e, w) => { const text = [...e.querySelectorAll("div")].find(d => d.textContent === w).firstChild; e.focus(); getSelection().collapse(text, text.data.length); }, words);
+    await caretAtTop();
+    await page.keyboard.type("My own first line.");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("My own second line.");
+    await caretAfter("My own first line.");
+    const seen = await server.call("read_composer");
+    expect(!seen.error && seen.text.startsWith(NOTE) && seen.value.open === true && seen.value.kind === "New message" && seen.value.format === "html" && seen.value.subject === "" && seen.value.caret === true
+      && seen.body.startsWith("My own first line.[CARET]\nMy own second line.") && seen.value.length === seen.body.length, "read_composer gives the message being written, unsaved as it is, with a mark where the caret is: " + seen.text + " | " + seen.body.slice(0, 80));
+    const carets = (await replays()).carets, savesMid = saves();
+    const more = await server.call("draft_message", { mode: "continue", body: "The assistant's line.\nAnd its second." });
+    const third = await server.call("draft_message", { mode: "continue", body: "And a third." });
+    const lines = () => page.locator("#c-editor").evaluate(e => {
+      const t = e.innerText, sig = e.querySelector(".ymsig"), last = [...e.querySelectorAll("div")].find(d => d.textContent === "And its second.");
+      return { order: ["My own first line.", "The assistant's line.", "And its second.", "And a third.", "My own second line."].map(s => t.indexOf(s)), aboveSignature: !sig || !!(last && (last.compareDocumentPosition(sig) & Node.DOCUMENT_POSITION_FOLLOWING)) };
+    });
+    const got = await lines();
+    // Yahoo's mock notes each save; Gmail's holds the one draft, which the second save replaces
+    expect(!more.error && more.value.opened === true && !("unsaved" in more.value) && !third.error && saves() === savesMid + (gm ? 1 : 2) && await composing(), "continue adds to the open message, which stays open and is saved: " + more.text + " " + third.text);
+    expect(got.order.every((at, i) => at >= 0 && (!i || at > got.order[i - 1])) && got.aboveSignature, "what the assistant wrote stands after the line the caret is in, what it adds next follows that, and the user's own lines are as they were: " + JSON.stringify(got));
+    expect((await replays()).carets === carets + 2, "and it is shown as if typed: " + JSON.stringify(await replays()));
+    // after: the line the text follows, wherever the caret is (it is still in the first line)
+    const afterLine = await server.call("draft_message", { mode: "continue", after: "own second", body: "After the second line." });
+    const placed = await page.locator("#c-editor").evaluate(e => ["My own second line.", "After the second line."].map(s => e.innerText.indexOf(s)));
+    expect(!afterLine.error && placed[0] >= 0 && placed[1] > placed[0] && JSON.stringify((await lines()).order) === JSON.stringify(got.order), "with after, the text goes after the line that is named, not where the caret is: " + afterLine.text + " " + JSON.stringify(placed));
+    // what was added is an entry of the undo history, which takes it out of the message again
+    const writing = () => page.locator("#c-editor").innerText();
+    expect(/^Undo: AI: add text to the message being written/.test(await undoSays()), "what was added is the undo history's newest entry: " + await undoSays());
+    await undo();
+    expect(await until(async () => !(await writing()).includes("After the second line.")) && (await writing()).includes("The assistant's line.") && (await writing()).includes("My own second line."),
+      "Undo takes out what was added last, and nothing else: " + (await writing()).slice(0, 200));
+    await page.click('#st-acts [data-act="redo"]');
+    expect(await until(async () => (await writing()).includes("After the second line.")), "and Redo puts it back");
+    const noLine = await server.call("draft_message", { mode: "continue", after: "no such line anywhere", body: "Lost." });
+    const twoLines = await server.call("draft_message", { mode: "continue", after: "My own", body: "Lost." });
+    expect(noLine.error && /has no line with/.test(noLine.text) && twoLines.error && /More than one line/.test(twoLines.text) && !(await page.locator("#c-editor").innerText()).includes("Lost."),
+      "a line that is not there, or words that two lines have, add nothing: " + noLine.text + " | " + twoLines.text);
+    const inSignature = await server.call("draft_message", { mode: "continue", after: "sig", body: "Lost." });
+    expect(inSignature.error && /not in what the user wrote/.test(inSignature.text) && !(await writing()).includes("Lost."), "a line that is not the user's own cannot be named: " + inSignature.text);
+    // a caret at the very start is where the message opened with it: the text goes after the user's own
+    await caretAtTop();
+    const atStart = await server.call("draft_message", { mode: "continue", body: "After all of my own." });
+    const ends = await page.locator("#c-editor").evaluate(e => { const sig = e.querySelector(".ymsig"), put = [...e.querySelectorAll("div")].find(d => d.textContent === "After all of my own."); return [e.innerText.indexOf("After the second line."), e.innerText.indexOf("After all of my own."), !!(put && (put.compareDocumentPosition(sig) & Node.DOCUMENT_POSITION_FOLLOWING))]; });
+    expect(!atStart.error && ends[0] >= 0 && ends[1] > ends[0] && ends[2], "with the caret where the message opened with it, the text goes after the user's own and above the signature: " + atStart.text + " " + JSON.stringify(ends));
+    const elsewhere = await server.call("draft_message", { mode: "new", after: "My own", to: ["x@example.com"], body: "x" });
+    expect(elsewhere.error && /goes with the mode continue only/.test(elsewhere.text), "after goes with continue only: " + elsewhere.text);
+    const theirs = await server.call("draft_message", { mode: "continue", to: ["x@example.com"], subject: "Mine", body: "x" });
+    expect(theirs.error && /adds to the text only/.test(theirs.text) && await page.locator("#c-subject").inputValue() === "" && JSON.stringify((await lines()).order) === JSON.stringify(got.order), "continue takes neither recipients nor a subject, and then adds nothing: " + theirs.text);
+    const notNow = await server.call("draft_message", { mode: "open_draft" });
+    expect(notNow.error && /being written in the mail tab/.test(notNow.text), "a saved draft is not opened over a message being written: " + notNow.text);
+    await page.locator("#c-editor").press("Escape");
+    expect(await until(async () => !(await composing())), "the user closes the composer");
+    expect(await until(async () => !/AI: add text/.test(await undoSays() || "")), "and what was added to that message leaves the undo history with it: " + await undoSays());
+
+    // ---------- open_draft: a saved draft opened as a click on it opens it; with several, the user is asked which ----------
+    const withBody = await server.call("draft_message", { mode: "open_draft", body: "x" });
+    expect(withBody.error && /takes no recipients, subject or body/.test(withBody.text) && !(await composing()), "open_draft opens a draft as it is, and takes nothing to put into it: " + withBody.text);
+    const notDraft = await server.call("draft_message", { mode: "open_draft", id: withFiles });
+    expect(notDraft.error && /not a draft in Drafts/.test(notDraft.text) && !(await composing()), "a message that is no draft is not opened as one: " + notDraft.text);
+    // both mocked mailboxes hold several drafts
+    const several = await server.call("draft_message", { mode: "open_draft" }), told = several.value?.drafts || [];
+    expect(!several.error && several.value?.opened === false && told.length > 1 && told.every(d => d.id && typeof d.subject === "string" && Array.isArray(d.to) && typeof d.begins === "string" && !("snippet" in d)) && !(await composing()),
+      "with several drafts and none named, none is opened, and the answer tells of each: " + several.text.slice(0, 400));
+    expect(several.text.startsWith("Several drafts are saved") && /Ask the user which/.test(several.text.split("\n")[0]) && several.text.split("\n")[1].startsWith(NOTE) && !("ask" in (several.value || {})),
+      "the server says to ask the user which, in words of its own before what is marked as mail: " + several.text.slice(0, 200));
+    const which = await server.call("draft_message", { mode: "open_draft", id: told[0]?.id });
+    expect(!which.error && which.value.opened === true && which.value.id && await until(composing), "open_draft opens the draft that is named in the composer: " + which.text);
+    const reopened = await server.call("read_composer");
+    expect(!reopened.error && reopened.value.open === true && reopened.value.kind === "Draft", "and it is the draft that is open there: " + reopened.text);
+    await page.locator("#c-editor").press("Escape");
+    expect(await until(async () => !(await composing())), "the user closes it again");
     expect(gm ? sentCount() === sentBefore : !h.calls.some(c => /send/i.test(c.name || "")), "nothing was sent");
 
     // ---------- another code in the box: said in place; the server's code again: connected ----------
-    await settings(true);
+    await page.click("#mcp-mark");
+    await settles("true mcp-copy");
+    await page.waitForTimeout(900);
+    expect(await atEnd() === "true mcp-copy", "switched on, a click on the marker opens Settings at their end with Copy focused: " + await atEnd());
     await typeCode("0123456789abcdef0123456789abcdef");
     await says("The server has a different code.");
-    expect(await said() === "The server has a different code.", "a code the server does not hold is said: " + await said());
+    expect(await said() === "The server has a different code." && await mark() === "code: AI access: wrong code", `a code the server does not hold is said, by the marker too: ${await said()} / ${await mark()}`);
     await typeCode("not a code");
     expect(await page.locator("#mcp-code").inputValue() === "0123456789abcdef0123456789abcdef" && /32 digits/.test(await said()), "what is not a code is not taken: " + await said());
     await typeCode(code);
@@ -270,7 +387,7 @@ async function suite(provider) {
 
     // ---------- off again: the row goes and the tab leaves the server ----------
     await page.locator("#mcp-on").uncheck();
-    expect(!(await page.locator("#mcp-row").isVisible()), "switched off, the row goes");
+    expect(!(await page.locator("#mcp-row").isVisible()) && await mark() === "off: AI access: off", "switched off, the row goes and the marker says off: " + await mark());
     await page.waitForTimeout(300);
     const askedBefore = server.asked.length;
     await page.waitForTimeout(1500);

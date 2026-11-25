@@ -2,12 +2,13 @@
 // Appended to the app's mail.js by this repository's build (tools/build.js): it stands inside that
 // module and uses its functions by name, and the app's own source has none of it. It hands mcp.js
 // what the bridge needs of the mail page: what the folder pane holds, the reader's cleaning of a
-// message, and the changes an assistant may make. Each change is made as the app's own action
-// makes it (the undo history's entry, the folder counts, the list, the address book), for
-// messages that need not be in the list; its entry in the undo history begins with "AI:". No
-// function here sends a message, deletes one for good or empties a folder.
-// uses: $ api compose state busy run pause status plural pushUndo aboutMessages groupBy applyFlags bumpFolder removeLocal byIds renderList clearReader readerRow updateFolderCounts keptUnread refreshStarredCount listDirty folderType folderName folderByType subfolders isHidden managed acctOf leafName parentPath checkFolderName renamePaths loadFolders renderFolders saveSettings loadList outOfMail mailLeft mailBack cleanHtml inlineImages hideReaderForCompose
-// watches: doSetRead doSetStarred doMove startCompose createFolderIn renameFolderAsk run
+// message, the opening of the composer, of a saved draft and of Settings, and the changes an
+// assistant may make. Each change is made as the app's own action makes it (the undo history's
+// entry, the folder counts, the list, the address book), for messages that need not be in the
+// list; its entry in the undo history begins with "AI:". No function here sends a message,
+// deletes one for good or empties a folder.
+// uses: $ api compose state busy run pause status plural pushUndo aboutMessages groupBy applyFlags bumpFolder removeLocal byIds renderList clearReader readerRow updateFolderCounts keptUnread refreshStarredCount listDirty folderType folderName folderByType subfolders isHidden managed acctOf leafName parentPath checkFolderName renamePaths loadFolders renderFolders saveSettings loadList outOfMail mailLeft mailBack cleanHtml inlineImages hideReaderForCompose openSettings imagesLeft hist history showUndo
+// watches: doSetRead doSetStarred doMove startCompose editDraft createFolderIn renameFolderAsk run
 {
   const inList = id => state.messages.some(m => m.id === id);
   // the list's own row where it holds the message, which is its newest state
@@ -127,6 +128,10 @@
     return named(to) || null;
   }
 
+  // The composer opens a message by putting away the one that is open. An assistant's message
+  // is never opened over the user's: mcp.js refuses while one is open, and since what is loaded
+  // first takes time, in which the user may start one, it is asked again just before the opening.
+  const STARTED = "A message was started in the mail tab meanwhile, so it was left alone and nothing was opened.";
   // The composer opened as Reply, Reply all, Forward or New opens it (startCompose), for a
   // message that need not be the one in the reader. The quoted original loads none of the
   // sender's remote pictures. Answers whether it opened.
@@ -140,12 +145,60 @@
         const body = await api.body(id);
         body.source = body.html;
         body.html = await inlineImages(cleanHtml(body.html, body), body);
+        if (compose.isOpen()) throw new Error(STARTED);
         opened = await compose.open({ mode, message: body.message, body, images: false, myEmail: me });
       }
       hideReaderForCompose(compose.isOpen());
       return !!opened;
     } catch (e) { if (!compose.isOpen()) hideReaderForCompose(false); throw e; }
   }
+  // A saved draft opened in the composer as a click on it in Drafts opens it (editDraft), for a
+  // draft that need not be in the list: with its pictures in it and its attachments as files,
+  // since each save replaces the draft and they must travel with it again. Where a picture or an
+  // attachment cannot be loaded the draft stays closed, and unchanged. A draft that quotes mail
+  // loads none of that mail's remote pictures here, where no click of the user's asked for it.
+  // Answers whether it opened.
+  async function openDraft(id) {
+    const r = await api.body(id);
+    r.html = await inlineImages(r.html, r, Infinity);
+    const missing = imagesLeft(r.html, r);
+    if (missing) throw new Error(`Could not load ${plural(missing, "picture")} of the draft, so it was not opened: saving it would leave ${missing === 1 ? "that picture" : "them"} out. The user can open it in the mail tab.`);
+    const atts = (r.attachments || []).filter(a => a.disposition !== "inline" && a.partId);
+    let files;
+    try {
+      files = await Promise.all(atts.map(async a => {
+        const x = await api.partBytes(id, a);
+        return new File([x.bytes], a.filename || x.filename || "attachment", { type: x.type || "application/octet-stream" });
+      }));
+    } catch (e) { throw new Error(`Could not load the draft's attachments, so it was not opened (it is unchanged): ${e.message}`); }
+    if (compose.isOpen()) throw new Error(STARTED);
+    hideReaderForCompose(true);
+    try {
+      const opened = await compose.open({ mode: "draft", message: r.message, body: r, files, partIds: atts.map(a => a.partId), myEmail: $("account").textContent, images: false });
+      hideReaderForCompose(compose.isOpen());
+      return !!opened;
+    } catch (e) { if (!compose.isOpen()) hideReaderForCompose(false); throw e; }
+  }
+  // What an assistant added to the message being written is an entry of the undo history like
+  // its other changes: Undo takes the text out of the message again, and Redo puts it back
+  // (undo and redo are the composer's, from glue/compose.js). Each entry stands alone, so one can
+  // be taken back whatever was added after it. An entry is for the message it was added to, while
+  // that is the one being written (alive): once the composer closes, or opens another, it could
+  // take nothing back, and leaves the history.
+  let additions = 0, standing = [];
+  function added({ undo, redo, alive }) {
+    status("AI: added text to the message being written");
+    const entry = { label: "AI: add text to the message being written", count: 1, touches: [`w:${++additions}`], undo, redo };
+    pushUndo(entry);
+    standing.push([entry, alive]);
+  }
+  new MutationObserver(() => {
+    const gone = standing.filter(([, alive]) => !alive());
+    if (!gone.length) return;
+    standing = standing.filter(([, alive]) => alive());
+    for (const [entry] of gone) history.remove(hist, entry);
+    showUndo();
+  }).observe($("compose"), { attributes: true, attributeFilter: ["class"] });
   // A draft was saved: the folder pane counts it, and a list of Drafts shows it.
   function draftsChanged() {
     loadFolders(true).catch(() => {});
@@ -159,6 +212,6 @@
     move: (rows, dest) => inTurn(() => move(rows, dest)),
     createFolder: (name, parent) => inTurn(() => createFolder(name, parent)),
     renameFolder: (f, name) => inTurn(() => renameFolder(f, name)),
-    openComposer, draftsChanged,
+    openComposer, openDraft, added, draftsChanged, openSettings: () => openSettings(true),
   })).catch(e => console.error("AI access could not start:", e));
 }
