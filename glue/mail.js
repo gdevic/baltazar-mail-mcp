@@ -7,7 +7,7 @@
 // entry, the folder counts, the list, the address book), for messages that need not be in the
 // list; its entry in the undo history begins with "AI:". No function here sends a message,
 // deletes one for good or empties a folder.
-// uses: $ api compose state busy run pause status plural pushUndo aboutMessages groupBy applyFlags bumpFolder removeLocal byIds renderList clearReader readerRow updateFolderCounts keptUnread refreshStarredCount listDirty folderType folderName folderByType subfolders isHidden managed acctOf leafName parentPath checkFolderName renamePaths loadFolders renderFolders saveSettings loadList outOfMail mailLeft mailBack cleanHtml inlineImages hideReaderForCompose openSettings imagesLeft hist history showUndo
+// uses: $ api compose state busy run pause status plural pushUndo aboutMessages groupBy applyFlags bumpFolder removeLocal byIds renderList clearReader readerRow updateFolderCounts keptUnread refreshStarredCount listDirty folderType folderName folderByType subfolders isHidden managed acctOf leafName parentPath checkFolderName renamePaths loadFolders renderFolders saveSettings loadList outOfMail mailLeft mailBack cleanHtml inlineImages hideReaderForCompose openSettings imagesLeft hist history showUndo undoOrRedo
 // watches: doSetRead doSetStarred doMove startCompose editDraft createFolderIn renameFolderAsk run
 {
   const inList = id => state.messages.some(m => m.id === id);
@@ -179,19 +179,25 @@
       return !!opened;
     } catch (e) { if (!compose.isOpen()) hideReaderForCompose(false); throw e; }
   }
-  // What an assistant added to the message being written is an entry of the undo history like
-  // its other changes: Undo takes the text out of the message again, and Redo puts it back
+  // Each stretch of text an assistant wrote into a message that is open (the text of a message
+  // it opened, and what it added to one the user is writing) is an entry of the undo history
+  // like its other changes: Undo takes the text out of the message again, and Redo puts it back
   // (undo and redo are the composer's, from glue/compose.js). Each entry stands alone, so one can
-  // be taken back whatever was added after it. An entry is for the message it was added to, while
-  // that is the one being written (alive): once the composer closes, or opens another, it could
-  // take nothing back, and leaves the history.
+  // be taken back whatever was written after it. An entry is for the message it was written into,
+  // while that is the one being written (alive): once the composer closes, or opens another, it
+  // could take nothing back, and leaves the history.
   let additions = 0, standing = [];
-  function added({ undo, redo, alive }) {
-    status("AI: added text to the message being written");
-    const entry = { label: "AI: add text to the message being written", count: 1, touches: [`w:${++additions}`], undo, redo };
+  // label: the entry's words in the history; said: the status line's, now that it is done.
+  function added({ undo, redo, alive }, label, said) {
+    status(said);
+    const entry = { label, count: 1, touches: [`w:${++additions}`], undo, redo };
     pushUndo(entry);
     standing.push([entry, alive]);
   }
+  // The stretch written last that still stands, which the bar above the message takes back as
+  // the undo history's own list does.
+  const lastWritten = () => standing.map(([entry]) => entry).filter(e => e.done && hist.entries.includes(e)).at(-1) || null;
+  const takeBack = () => { const entry = lastWritten(); return entry ? run(() => undoOrRedo(entry, "undo")) : null; };
   new MutationObserver(() => {
     const gone = standing.filter(([, alive]) => !alive());
     if (!gone.length) return;
@@ -212,6 +218,6 @@
     move: (rows, dest) => inTurn(() => move(rows, dest)),
     createFolder: (name, parent) => inTurn(() => createFolder(name, parent)),
     renameFolder: (f, name) => inTurn(() => renameFolder(f, name)),
-    openComposer, openDraft, added, draftsChanged, openSettings: () => openSettings(true),
+    openComposer, openDraft, added, canTakeBack: () => !!lastWritten(), takeBack, draftsChanged, openSettings: () => openSettings(true),
   })).catch(e => console.error("AI access could not start:", e));
 }

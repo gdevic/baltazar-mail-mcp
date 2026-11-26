@@ -29,3 +29,11 @@
    draws no ring for a focus that a click moved, so these two show theirs whenever they have it. */
 #mcp-copy:focus, #mcp-on:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
 #mcp-code { flex: none; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 3px; padding: 1px 4px; font-family: var(--mono); font-size: .92em; }
+/* What an assistant wrote stays tinted while the message is written (mcp.js, the tint), and a bar
+   above the message says what the tint means and takes the last of it back. The tint is one
+   colour in every theme, since a message is written on white whatever the theme; the bar is the
+   theme's, as the composer's other bars are, and shows the tint as it looks on the page. */
+::highlight(mcp-added) { background-color: rgba(92, 124, 250, .17); }
+#mcp-tint { flex: none; display: flex; align-items: center; gap: 8px; padding: 3px 12px; background: var(--bg2); color: var(--fg2); border-bottom: 1px solid var(--line); font-size: calc(12 * var(--fu)); }
+#mcp-tint i { flex: none; width: 22px; height: 12px; border: 1px solid var(--line); border-radius: 2px; background: linear-gradient(rgba(92, 124, 250, .17), rgba(92, 124, 250, .17)), #fff; }
+#mcp-tint button { margin-left: 4px; font-size: calc(12 * var(--fu)); }

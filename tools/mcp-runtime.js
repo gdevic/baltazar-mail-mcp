@@ -263,6 +263,10 @@ async function suite(provider) {
     const editor = await page.locator("#c-editor").evaluate(e => ({ text: e.innerText, sig: !!e.querySelector(".ymsig"), quote: !!e.querySelector(".ymq blockquote"), first: e.firstElementChild?.textContent, tags: e.querySelectorAll("soon").length }));
     expect((await replays()).carets === 1 && (await replays()).heldBack, "what the assistant wrote is shown as if typed, behind a caret marked AI: " + JSON.stringify(await replays()));
     expect(await until(async () => !(await page.locator("#mcp-caret").count()) && !(await page.evaluate(() => CSS.highlights.has("mcp-unwritten")))), "and the typing ends by itself, with all the text shown");
+    // what the assistant wrote stays tinted, with nothing of the message changed for it, until the user keeps it
+    const tintOn = () => page.evaluate(() => `${CSS.highlights.has("mcp-added")} ${!!document.getElementById("mcp-tint")} ${document.getElementById("c-editor").innerHTML.includes("mcp")}`);
+    expect(await tintOn() === "true true false" && await page.locator("#mcp-tint").isVisible(), "what the assistant wrote stays tinted, a bar above the message says so, and the message holds nothing of it: " + await tintOn());
+    expect(await page.locator('#mcp-tint [data-act="undo"]').isVisible() && /^Undo: AI: write the message's text/.test(await undoSays()), "the bar has Undo for it, and it is the undo history's newest entry: " + await undoSays());
     expect(await composing() && /^Re: Subject .*3$/.test(await page.locator("#c-subject").inputValue()) && (await page.locator("#c-to").textContent()).includes("s3@x.com"),
       "the composer is open on it, with the recipients and subject a reply has: " + await page.locator("#c-subject").inputValue());
     expect(editor.first === "Thanks for the plan." && editor.text.includes("See you <soon> & well.") && editor.tags === 0 && editor.sig && editor.quote && editor.text.indexOf("Thanks") < editor.text.indexOf("sig"),
@@ -326,11 +330,14 @@ async function suite(provider) {
     // what was added is an entry of the undo history, which takes it out of the message again
     const writing = () => page.locator("#c-editor").innerText();
     expect(/^Undo: AI: add text to the message being written/.test(await undoSays()), "what was added is the undo history's newest entry: " + await undoSays());
-    await undo();
+    // the bar's Undo takes back the stretch written last, and its tint with it; the others stay
+    const stretches = () => page.evaluate(() => CSS.highlights.get("mcp-added")?.size || 0);
+    await page.click('#mcp-tint [data-act="undo"]');
     expect(await until(async () => !(await writing()).includes("After the second line.")) && (await writing()).includes("The assistant's line.") && (await writing()).includes("My own second line."),
-      "Undo takes out what was added last, and nothing else: " + (await writing()).slice(0, 200));
+      "Undo on the bar takes out what was written last, and nothing else: " + (await writing()).slice(0, 200));
+    expect(await until(async () => await stretches() === 2) && await page.locator("#mcp-tint").isVisible(), "the stretches before it stay tinted: " + await stretches());
     await page.click('#st-acts [data-act="redo"]');
-    expect(await until(async () => (await writing()).includes("After the second line.")), "and Redo puts it back");
+    expect(await until(async () => (await writing()).includes("After the second line.")) && await until(async () => await stretches() === 3), "and Redo puts it back, tinted: " + await stretches());
     const noLine = await server.call("draft_message", { mode: "continue", after: "no such line anywhere", body: "Lost." });
     const twoLines = await server.call("draft_message", { mode: "continue", after: "My own", body: "Lost." });
     expect(noLine.error && /has no line with/.test(noLine.text) && twoLines.error && /More than one line/.test(twoLines.text) && !(await page.locator("#c-editor").innerText()).includes("Lost."),
@@ -348,9 +355,96 @@ async function suite(provider) {
     expect(theirs.error && /adds to the text only/.test(theirs.text) && await page.locator("#c-subject").inputValue() === "" && JSON.stringify((await lines()).order) === JSON.stringify(got.order), "continue takes neither recipients nor a subject, and then adds nothing: " + theirs.text);
     const notNow = await server.call("draft_message", { mode: "open_draft" });
     expect(notNow.error && /being written in the mail tab/.test(notNow.text), "a saved draft is not opened over a message being written: " + notNow.text);
+    // replace: what the user has selected of their own words is corrected in place, over as many
+    // paragraphs as the selection takes in, and nothing outside it is
+    const selectLines = (a, b) => page.locator("#c-editor").evaluate((e, [from, to]) => {
+      const text = (w, last) => { const d = [...e.querySelectorAll("div")].find(x => x.textContent === w); return last ? d.lastChild : d.firstChild; };
+      const r = document.createRange();
+      r.setStart(text(from, false), 0); r.setEnd(text(to, true), text(to, true).data.length);
+      e.focus(); getSelection().removeAllRanges(); getSelection().addRange(r);
+    }, [a, b]);
+    await selectLines("My own first line.", "My own second line.");
+    const picked = await server.call("read_composer"), chosen = picked.value?.selection;
+    expect(/^[0-9a-f]{12}$/.test(chosen || "") && picked.value.selected.startsWith("My own first line.") && picked.body.startsWith("[SELECTION]My own first line.") && picked.body.includes("My own second line.[/SELECTION]") && !picked.body.includes("[CARET]"),
+      "read_composer marks what the user has selected, and gives the selection a name: " + JSON.stringify(chosen) + " " + picked.body.slice(0, 60));
+    const stale = await server.call("draft_message", { mode: "replace", selection: "000000000000", edits: [{ find: "own first", with: "very first" }] });
+    const unnamed = await server.call("draft_message", { mode: "replace", edits: [{ find: "own first", with: "very first" }] });
+    expect(stale.error && /not the one you read/.test(stale.text) && unnamed.error && /Give selection/.test(unnamed.text) && (await writing()).includes("My own first line."),
+      "a selection that is not the one the assistant read, or that it does not name, is left alone: " + stale.text + " | " + unnamed.text);
+    const beyond = await server.call("draft_message", { mode: "replace", selection: chosen, edits: [{ find: "own first", with: "very first" }, { find: "After all of my own", with: "Lost" }] });
+    expect(beyond.error && /has no "After all of my own"/.test(beyond.text) && (await writing()).includes("My own first line.") && !(await writing()).includes("Lost"),
+      "words outside the selection cannot be named, and then none of the edits is made: " + beyond.text);
+    const tintsBefore = await stretches();
+    const fixed = await server.call("draft_message", { mode: "replace", selection: chosen, edits: [{ find: "[SELECTION]My own first", with: "My very first" }, { find: "My own second line.", with: "My 2nd line, corrected." }, { find: "And its second", with: "And its 2nd" }] });
+    expect(!fixed.error && fixed.value.opened === true && fixed.value.replaced === 3 && /^Undo: AI: correct the text that was selected/.test(await undoSays()),
+      "replace corrects several paragraphs of the selection at once, as one entry of the undo history: " + fixed.text + " " + await undoSays());
+    const corrected = await writing();
+    expect(["My very first line.", "My 2nd line, corrected.", "And its 2nd.", "The assistant's line.", "After all of my own."].every(s => corrected.includes(s)) && !corrected.includes("My own") && await stretches() === tintsBefore + 3,
+      "each place has the new words and a tint, and what was not named is as it was: " + corrected.slice(0, 200) + " " + await stretches());
+    await page.click('#mcp-tint [data-act="undo"]');
+    expect(await until(async () => { const now = await writing(); return ["My own first line.", "My own second line.", "And its second."].every(s => now.includes(s)) && !now.includes("very") && !now.includes("2nd"); }),
+      "and one Undo puts all of the user's own words back: " + (await writing()).slice(0, 200));
+    // the whole message selected: the signature is in the selection, and is not the user's own to change
+    await page.locator("#c-editor").evaluate(e => { const r = document.createRange(); r.selectNodeContents(e); e.focus(); getSelection().removeAllRanges(); getSelection().addRange(r); });
+    const everything = await server.call("read_composer");
+    const selectAll = () => page.locator("#c-editor").evaluate(e => { const r = document.createRange(); r.selectNodeContents(e); e.focus(); getSelection().removeAllRanges(); getSelection().addRange(r); });
+    const signed = () => page.locator("#c-editor .ymsig").textContent().catch(() => "");
+    const sigEdit = await server.call("draft_message", { mode: "replace", selection: everything.value?.selection, edits: [{ find: "sig", with: "Mine" }] });
+    expect(!sigEdit.error && sigEdit.value.replaced === 1 && await signed() === "Mine", "the selection is the user's word for what may change, the signature in it too: " + sigEdit.text);
+    await page.click('#mcp-tint [data-act="undo"]');
+    expect(await until(async () => await signed() === "sig"), "and Undo puts it back: " + await signed());
+    await selectAll();
+    const allAgain = await server.call("read_composer");
+    const anyOwn = await server.call("draft_message", { mode: "replace", selection: allAgain.value?.selection, edits: [{ find: "After all of my own.", with: "After all of my own, at last." }] });
+    expect(!anyOwn.error && anyOwn.value.replaced === 1 && (await writing()).includes("After all of my own, at last."), "with the whole message selected, any words in it can be corrected: " + anyOwn.text);
+    await page.click('#mcp-tint [data-act="undo"]');
+    expect(await until(async () => (await writing()).includes("After all of my own.") && !(await writing()).includes("at last")), "and taken back");
+    // a rewrite of all that is selected takes with it whatever the user selected, the signature too
+    await selectAll();
+    const allOnceMore = await server.call("read_composer");
+    const wiped = await server.call("draft_message", { mode: "replace", selection: allOnceMore.value?.selection, body: "Only this is left." });
+    expect(!wiped.error && (await writing()).trim() === "Only this is left." && await page.locator("#c-editor .ymsig").count() === 0, "a rewrite of the whole selection leaves what the assistant wrote, and nothing else of what was selected: " + wiped.text + " " + JSON.stringify((await writing()).slice(0, 80)));
+    await page.click('#mcp-tint [data-act="undo"]');
+    expect(await until(async () => { const now = await writing(); return ["My own first line.", "And a third.", "My own second line.", "After all of my own."].every(s => now.includes(s)) && await signed() === "sig"; }), "and one Undo puts the message back as it was: " + (await writing()).slice(0, 200));
+    await page.locator("#c-editor").evaluate(e => getSelection().collapse(e, 0));
+    const collapsed = await server.call("draft_message", { mode: "replace", selection: everything.value?.selection, edits: [{ find: "My own first", with: "Lost" }] });
+    expect(collapsed.error && /Nothing is selected/.test(collapsed.text) && !(await writing()).includes("Lost"), "with nothing selected, nothing is changed: " + collapsed.text);
+    // the user corrects a word of what the assistant wrote: it stays tinted, as corrected
+    await page.locator("#c-editor").evaluate(e => { const t = [...e.querySelectorAll("div")].find(d => d.textContent === "And a third.").firstChild; e.focus(); getSelection().collapse(t, t.data.length); });
+    await page.keyboard.type(" Indeed.");
+    expect(await page.evaluate(() => [...CSS.highlights.get("mcp-added")].some(r => r.toString().includes("And a third. Indeed."))), "what the user corrects in the assistant's text stays tinted: " + await writing());
+    // replace with a body: all of the user's own words in the selection give way to what the
+    // assistant wrote, in whatever form, and nothing outside the selection does
+    const partOf = (line, from, to) => page.locator("#c-editor").evaluate((e, [l, a, b]) => { const t = [...e.querySelectorAll("div")].find(d => d.textContent === l).firstChild, r = document.createRange(); r.setStart(t, a); r.setEnd(t, b); e.focus(); getSelection().removeAllRanges(); getSelection().addRange(r); }, [line, from, to]);
+    await partOf("After the second line.", 0, 5);
+    const word = await server.call("read_composer");
+    const both = await server.call("draft_message", { mode: "replace", selection: word.value?.selection, body: "Past", edits: [{ find: "After", with: "Past" }] });
+    expect(word.value?.selected === "After" && both.error && /either body/.test(both.text) && (await writing()).includes("After the second line."), "replace takes a body or edits, not both: " + both.text);
+    const inLine = await server.call("draft_message", { mode: "replace", selection: word.value?.selection, body: "Past" });
+    expect(!inLine.error && inLine.value.opened === true && (await writing()).includes("Past the second line.") && !(await writing()).includes("After the second line.") && /^Undo: AI: rewrite the text that was selected/.test(await undoSays()),
+      "words selected within a line are rewritten within it: " + inLine.text + " " + await undoSays());
+    await page.click('#mcp-tint [data-act="undo"]');
+    expect(await until(async () => (await writing()).includes("After the second line.") && !(await writing()).includes("Past the")), "and Undo puts them back: " + (await writing()).slice(0, 200));
+    await selectLines("My own first line.", "My own second line.");
+    const paragraphs = await server.call("read_composer", { html: true });
+    expect(!paragraphs.error && /\[SELECTION\]My own first line\.<\/div>/.test(paragraphs.body) && paragraphs.body.includes("[/SELECTION]"), "read_composer gives the message as HTML too, with the selection marked: " + paragraphs.body.slice(0, 120));
+    const rewritten = await server.call("draft_message", { mode: "replace", selection: paragraphs.value?.selection, html: true, body: "<p>One paragraph in place of them all.</p><ul><li>and a list</li></ul><script>bad()</script>" });
+    const shape = await page.locator("#c-editor").evaluate(e => ({ text: e.innerText, list: e.querySelectorAll("ul li").length, script: e.querySelectorAll("script").length, sig: e.querySelector(".ymsig")?.textContent }));
+    expect(!rewritten.error && shape.text.includes("One paragraph in place of them all.") && shape.list === 1 && shape.script === 0 && shape.sig === "sig" && !shape.text.includes("My own") && !shape.text.includes("The assistant's line.")
+      && shape.text.includes("After the second line.") && shape.text.includes("After all of my own.") && shape.text.indexOf("One paragraph") < shape.text.indexOf("After the second line."),
+      "several selected paragraphs are rewritten as the assistant sees fit, in another form too, and what was not selected stays: " + rewritten.text + " " + JSON.stringify(shape).slice(0, 300));
+    await page.click('#mcp-tint [data-act="undo"]');
+    expect(await until(async () => { const now = await writing(); return ["My own first line.", "The assistant's line.", "And its second.", "And a third. Indeed.", "My own second line."].every(s => now.includes(s)) && !now.includes("One paragraph"); }),
+      "and one Undo puts back all that stood there, as it was: " + (await writing()).slice(0, 240));
+    // the user saves the message: the marking ends, and the text and its undo stay
+    expect(await stretches() > 0, "until the user saves, what the assistant wrote is tinted: " + await stretches());
+    await page.click("#c-save");
+    expect(await until(async () => await stretches() === 0 && !(await page.locator("#mcp-tint").count())) && await composing() && (await writing()).includes("After all of my own.") && /AI: add text/.test(await undoSays()),
+      "saving the message ends the marking, and leaves the text and its entry of the undo history: " + await stretches());
     await page.locator("#c-editor").press("Escape");
     expect(await until(async () => !(await composing())), "the user closes the composer");
     expect(await until(async () => !/AI: add text/.test(await undoSays() || "")), "and what was added to that message leaves the undo history with it: " + await undoSays());
+    expect(await until(async () => await page.evaluate(() => !CSS.highlights.has("mcp-added") && !document.getElementById("mcp-tint"))), "and so does its tint");
 
     // ---------- open_draft: a saved draft opened as a click on it opens it; with several, the user is asked which ----------
     const withBody = await server.call("draft_message", { mode: "open_draft", body: "x" });

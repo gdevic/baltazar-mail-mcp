@@ -19,7 +19,8 @@ export const WIRE = 1;
 // running the copy it loaded while the files and the server beside them are replaced. A tab that
 // tells none has 0. 1: the message being written read, added to and reopened from Drafts, the line
 // named for what is added, and an argument the page does not know refused, not passed over.
-export const LEVEL = 1;
+// 2: what the user has selected corrected in place, or rewritten.
+export const LEVEL = 2;
 // How long the tab waits before it looks for a server again (ms): each wait once, then the last.
 export const BACKOFF = [1000, 3000, 10000, 30000];
 

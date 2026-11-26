@@ -48,7 +48,7 @@ const DOING = {
   folders: "listing folders", messages: "listing messages", search: "searching", message: "reading a message", conversation: "reading a conversation",
   attachment: "fetching an attachment", contacts: "looking up people", mark: "marking messages", move: "moving messages",
   createFolder: "making a folder", renameFolder: "renaming a folder", composing: "reading your draft",
-  draft: a => a?.mode === "open_draft" ? "opening a draft" : "writing a draft",
+  draft: a => a?.mode === "open_draft" ? "opening a draft" : a?.mode === "replace" ? "rewriting your selection" : "writing a draft",
 };
 const LINGER = 1500;
 let doing = "", resting = 0;
@@ -62,6 +62,12 @@ export async function init(hooks) {
   // a tab that comes into view, or whose Settings open, looks for the server at once
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") nudge?.(); });
   new MutationObserver(() => { if (!$("settings").classList.contains("hidden")) { nudge?.(); syncSettings(); } }).observe($("settings"), { attributes: true, attributeFilter: ["class"] });
+  // the tint on what an assistant wrote ends with the composer, when the user saves the message
+  // (Save draft, or its key), and where its text is gone
+  new MutationObserver(showTint).observe($("compose"), { attributes: true, attributeFilter: ["class"] });
+  $("c-save").addEventListener("click", untint);
+  $("compose").addEventListener("keydown", e => { if ((e.ctrlKey || e.metaKey) && e.key === "s") untint(); }, true);
+  new MutationObserver(() => { if (tinted.some(r => r.collapsed)) showTint(); }).observe($("c-editor"), { childList: true, subtree: true });
   if (on && isCode(code)) start();
 }
 
@@ -133,15 +139,25 @@ function rested() {
   doing = ""; syncMark();
 }
 
+// The message being written, as the composer's glue reads it, with the marks in its text.
+const look = () => pen.look({ caret: CARET, from: SELECTION[0], to: SELECTION[1] });
+
 // ---------- what an assistant can ask for ----------
 const FOLDER_TYPES = { INBOX: "inbox", DRAFT: "drafts", SENT: "sent", ARCHIVE: "archive", BULK: "spam", TRASH: "trash" };
 // A message's text goes out this many characters at a time; an attachment of more bytes than
 // this is not fetched; this many of the rows shown are remembered; one change takes this many
 // messages at most.
-const TEXT_PAGE = 12000, BLOB_MAX = 30 * 1048576, ROWS_KEPT = 2000, IDS_MAX = 100;
+const TEXT_PAGE = 12000, BLOB_MAX = 30 * 1048576, ROWS_KEPT = 2000, IDS_MAX = 100, EDITS_MAX = 200;
 
-// What marks the user's caret in the text of the message being written, for an assistant.
-const CARET = "[CARET]";
+// What marks the user's caret in the text of the message being written, for an assistant, and
+// what stands around the text the user has selected there. An assistant that names words of the
+// message as it read them may give the marks with them: they are taken out again (unmarked).
+const CARET = "[CARET]", SELECTION = ["[SELECTION]", "[/SELECTION]"];
+const unmarked = s => [CARET, ...SELECTION].reduce((text, mark) => text.replaceAll(mark, ""), s);
+// The selection's name: a few digits of the SHA-256 of its text, which an assistant gives back
+// with what it wants done to the selection, so that a selection the user has changed since the
+// assistant read it is left alone.
+const nameOf = async text => [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)))].slice(0, 6).map(b => b.toString(16).padStart(2, "0")).join("");
 
 const whole = (v, least, most, or) => { const n = Math.trunc(Number(v ?? or)); return Number.isFinite(n) ? Math.min(most, Math.max(least, n)) : or; };
 // A text a part at a time: the part that begins at offset, the whole text's length, and where the
@@ -235,7 +251,7 @@ function written(html) {
   }
   return kept.innerHTML;
 }
-const MODES = { new: "new", reply: "reply", reply_all: "replyAll", forward: "forward", continue: "continue", open_draft: "draft" };
+const MODES = { new: "new", reply: "reply", reply_all: "replyAll", forward: "forward", continue: "continue", replace: "replace", open_draft: "draft" };
 // When a draft is to be opened and none is named: this many of the saved drafts are told of, each
 // with this many characters of how its text begins, for the user to be asked which.
 const DRAFTS_TOLD = 10, DRAFT_BEGINS = 400;
@@ -246,9 +262,9 @@ const people = v => given(v) ? parseAddrs(Array.isArray(v) ? v.join(", ") : Stri
 // The arguments each command takes. One that is not among them is refused, not passed over: it
 // comes from a server newer than this copy of the page, and it meant something there.
 const ARGS = {
-  folders: [], messages: ["folder", "limit", "offset"], search: ["query", "folder", "limit", "offset"], message: ["id", "offset", "html"], composing: ["offset"],
+  folders: [], messages: ["folder", "limit", "offset"], search: ["query", "folder", "limit", "offset"], message: ["id", "offset", "html"], composing: ["offset", "html"],
   conversation: ["id"], attachment: ["id", "part", "token"], contacts: ["query", "limit"], mark: ["ids", "read", "starred"], move: ["ids", "to"],
-  createFolder: ["name", "parent"], renameFolder: ["folder", "name"], draft: ["mode", "id", "to", "cc", "bcc", "subject", "body", "html", "open", "after"],
+  createFolder: ["name", "parent"], renameFolder: ["folder", "name"], draft: ["mode", "id", "to", "cc", "bcc", "subject", "body", "html", "open", "after", "edits", "selection"],
 };
 
 const OPS = {
@@ -293,14 +309,15 @@ const OPS = {
 
   // The message the user is writing, as it stands in the composer, saved or not: read from the
   // page, with nothing of it changed. Its text is made plain as a message's is, without what its
-  // quoted original hides, and has CARET where the user's caret is.
+  // quoted original hides, and has CARET where the user's caret is, or the marks of SELECTION
+  // around what the user has selected, which then has a name too (selection).
   composing: async a => {
     if (!isOpen()) return { open: false };
-    const m = pen.look(CARET), person = p => p.name && p.name !== p.email ? `${noBidi(p.name)} <${p.email}>` : p.email;
-    const text = (m.html != null ? pen.toText(shown(m.html)) : m.text).replaceAll("\u200B", "");
+    const m = look(), person = p => p.name && p.name !== p.email ? `${noBidi(p.name)} <${p.email}>` : p.email;
+    const text = (m.html == null ? m.text : a.html ? shown(m.html) : pen.toText(shown(m.html))).replaceAll("\u200B", "");
     return { open: true, kind: m.kind, from: m.from, to: m.to.map(person), ...(m.cc.length ? { cc: m.cc.map(person) } : {}), ...(m.bcc.length ? { bcc: m.bcc.map(person) } : {}),
       subject: noBidi(m.subject), format: m.html != null ? "html" : "text", attachments: m.files.map(f => noBidi(f || "")), caret: m.caret,
-      ...(m.selected ? { selected: m.selected.slice(0, 2000) } : {}), ...part(text, a.offset) };
+      ...(m.selected ? { selected: m.selected.slice(0, 2000), selection: await nameOf(m.selected) } : {}), ...part(text, a.offset) };
   },
 
   // The provider's conversation of the message, arranged as the conversation view arranges it;
@@ -371,7 +388,7 @@ const OPS = {
   // all the same, so the answer says so instead of failing.
   draft: async a => {
     const mode = MODES[a.mode ?? "new"];
-    if (!mode) throw new Error("mode is new, reply, reply_all, forward, continue or open_draft.");
+    if (!mode) throw new Error("mode is new, reply, reply_all, forward, continue, replace or open_draft.");
     const body = String(a.body ?? "").replace(/\r\n?/g, "\n");
     const html = a.html ? written(body) : body.split("\n").map(l => `<div>${esc(l) || "<br>"}</div>`).join("");
     if (mode === "continue") {
@@ -381,15 +398,64 @@ const OPS = {
       if (!text.trim()) throw new Error(a.html && body.trim() ? "Nothing to add: the body holds no text once what is not kept of its HTML is dropped." : "Nothing to add: give a body.");
       // The line is named as read_composer shows it, which is with the caret's mark and, at its
       // start, with the marks that plain text gives a quoted line and a list's item.
-      const after = given(a.after) ? String(a.after).replaceAll(CARET, "").replace(/^\s*(?:>\s?)*(?:(?:•|\d+\.)\s)?/, "") : null;
+      const after = given(a.after) ? unmarked(String(a.after)).replace(/^\s*(?:>\s?)*(?:(?:•|\d+\.)\s)?/, "") : null;
       const put = pen.add({ html, text, after });
       replay(put.wrote);
-      mail.added(put);            // an entry of the undo history, which takes the text out again
+      mail.added(entryFor(put), "AI: add text to the message being written", "AI: added text to the message being written");
       const why = await pen.save(true);
       if (!why) mail.draftsChanged();
       return { id: pen.savedId(), opened: true, ...(why ? { unsaved: why } : {}) };
     }
     if (given(a.after)) throw new Error("after names a line of the message being written, and goes with the mode continue only.");
+    // The mode replace is for what the user has selected in the message being written, a word,
+    // several paragraphs or all of it, and for nothing outside the selection. Within it the
+    // assistant does what the user asked, since the user chose what may change and can take it
+    // back; a quoted message or the signature that the user selected is part of that. body takes
+    // the place of all that is selected: other words, other paragraphs, another form. edits changes words in place and leaves the rest of the
+    // selection, its paragraphs and its formatting as they are: a list of words of the selection
+    // (find) and what is to stand in their place (with), all found before any is made
+    // (glue/compose.js says exactly what each does). selection is the selection's name as the
+    // assistant read it, and must be the name of what is selected now. What was done is one
+    // entry of the undo history, which puts back what stood there, and is tinted.
+    if (mode === "replace") {
+      if (!isOpen()) throw new Error("No message is being written in the mail tab. replace changes what the user has selected in one.");
+      if (given(a.to) || given(a.cc) || given(a.bcc) || given(a.subject)) throw new Error("replace changes the selected text only: the recipients and the subject of the message being written are the user's to change.");
+      const rewrites = !!body.trim(), corrects = given(a.edits);
+      if (rewrites === corrects) throw new Error("Give either body, which takes the place of all that is selected, or edits, which change words within it; not both, and not neither.");
+      const edits = (Array.isArray(a.edits) ? a.edits : []).map(e => ({
+        // words named as read_composer shows them, which is with its marks and, at a line's start, with the marks plain text gives a quoted line and a list's item
+        find: unmarked(String(e?.find ?? "")).replace(/^\s*(?:>\s?)*(?:(?:•|\d+\.)\s)?/, ""),
+        with: String(e?.with ?? "").replace(/\r\n?/g, "\n"),
+      }));
+      if (corrects && !edits.length) throw new Error("Give edits as a list of { find, with }: the words to replace and what is to stand in their place.");
+      if (edits.length > EDITS_MAX) throw new Error(`At most ${EDITS_MAX} edits at a time.`);
+      if (edits.some(e => !e.find.trim() || !e.with.trim())) throw new Error("Each edit names words (find) and what is to stand in their place (with), neither of them empty. To take words out, give body: the selection as it is to read without them.");
+      const text = a.html ? pen.toText(html) : body;
+      if (rewrites && !text.trim()) throw new Error("Nothing to put in place of the selection: the body holds no text once what is not kept of its HTML is dropped.");
+      if (!given(a.selection)) throw new Error("Give selection: the name of the user's selection, as read_composer gave it, so that nothing else than what you read is changed.");
+      const chosen = look().selected;
+      if (!chosen) throw new Error("Nothing is selected in the text of the message being written. Ask the user to select what is to be changed.");
+      const name = await nameOf(chosen);
+      // what is selected now is asked again after the wait for its name, and is changed at once
+      if (name !== String(a.selection).trim().toLowerCase() || look().selected !== chosen) throw new Error("The user's selection is not the one you read, so nothing was changed. read_composer gives the selection as it is now, and its name.");
+      const out = {};
+      if (rewrites) {
+        const put = pen.rewrite({ html, text: body, formatted: !!a.html });
+        replay(put.wrote);
+        mail.added(entryFor(put), "AI: rewrite the text that was selected", "AI: rewrote the selected text");
+      } else {
+        const put = pen.replace(edits);
+        replaying?.();
+        for (const range of put.ranges()) tint(range);
+        mail.added({ undo: put.undo, redo: async () => { await put.redo(); for (const range of put.ranges()) tint(range); }, alive: put.alive },
+          "AI: correct the text that was selected", `AI: corrected the selected text in ${put.made === 1 ? "one place" : `${put.made} places`}`);
+        out.replaced = put.made;
+      }
+      const why = await pen.save(true);
+      if (!why) mail.draftsChanged();
+      return { id: pen.savedId(), opened: true, ...out, ...(why ? { unsaved: why } : {}) };
+    }
+    if (given(a.edits) || given(a.selection)) throw new Error("edits and selection are for what the user has selected, and go with the mode replace only.");
     // The mode open_draft opens a saved draft as the user's click on it in Drafts does, and
     // changes nothing of it. The draft is the one named, which must be in Drafts; or, with none
     // named, the only one there. With several there and none named, none is opened: the answer
@@ -428,8 +494,11 @@ const OPS = {
     let opened;
     try { opened = await mail.openComposer(mode, id); } catch (e) { if (api.isGone(e)) throw new Error(GONE); throw e; }
     if (!opened) throw new Error("The composer could not be opened.");
-    const wrote = pen.fill({ to, cc, bcc, subject: a.subject == null ? null : String(a.subject), html, text: a.html ? pen.toText(html) : body });
-    if (a.open !== false) replay(wrote);        // begun before the editor is next painted, so the text is not seen whole first
+    const put = pen.fill({ to, cc, bcc, subject: a.subject == null ? null : String(a.subject), html, text: a.html ? pen.toText(html) : body });
+    if (a.open !== false) {
+      replay(put.wrote);        // begun before the editor is next painted, so the text is not seen whole first
+      if (put.undo) mail.added(entryFor(put), "AI: write the message's text", "AI: wrote the message's text");
+    }
     const why = await pen.save();
     if (why) throw new Error(`The message is open in the mail tab but could not be saved to Drafts: ${why}`);
     const out = { id: pen.savedId(), opened: a.open !== false };
@@ -455,11 +524,12 @@ const PER_CHAR = 25, REPLAY_MS = [600, 3000], STEP_MS = 30, CARET_STAYS = 1200;
 let replaying = null;           // ends the replay under way
 function replay(wrote) {
   replaying?.();
-  if (!wrote || !globalThis.Highlight || !CSS.highlights || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  if (!wrote || !globalThis.Highlight || !CSS.highlights) return;
   const pane = $("compose"), box = $("c-body"), texts = [];
   for (let walk = document.createTreeWalker(wrote.commonAncestorContainer, NodeFilter.SHOW_TEXT), n; (n = walk.nextNode());) if (n.data.length && wrote.intersectsNode(n)) texts.push(n);
   const total = texts.reduce((sum, n) => sum + n.data.length, 0);
-  if (!total) return;
+  // with nothing to type, or for a reader who asked for less motion, the text is there at once, tinted
+  if (!total || matchMedia("(prefers-reduced-motion: reduce)").matches) return tint(wrote);
   const caret = el("div", { id: "mcp-caret", hidden: true }, el("b", { textContent: "AI" }));
   caret.setAttribute("aria-hidden", "true");
   box.append(caret);
@@ -472,6 +542,8 @@ function replay(wrote) {
     CSS.highlights.delete(UNWRITTEN);
     caret.remove();
     if (replaying === end) replaying = null;
+    typing = null;
+    tint(wrote);
   };
   // The caret after the character before (node, at), or before the node's first; where that
   // character takes no room on the page the caret stays where it was. The box scrolls to keep it
@@ -497,16 +569,55 @@ function replay(wrote) {
     while (i < texts.length - 1 && at >= texts[i].data.length) at -= texts[i++].data.length;
     at = Math.min(at, texts[i].data.length);
     place(texts[i], at);
-    if (shown >= total) { CSS.highlights.delete(UNWRITTEN); timer = setTimeout(end, CARET_STAYS); return; }
+    if (shown >= total) { CSS.highlights.delete(UNWRITTEN); typing = wrote; showTint(); timer = setTimeout(end, CARET_STAYS); return; }
     const rest = document.createRange();
     rest.setStart(texts[i], at); rest.setEnd(wrote.endContainer, wrote.endOffset);
     CSS.highlights.set(UNWRITTEN, new Highlight(rest));
+    // the tint follows the typing
+    typing = document.createRange();
+    typing.setStart(wrote.startContainer, wrote.startOffset); typing.setEnd(texts[i], at);
+    showTint();
     timer = setTimeout(step, STEP_MS);
   };
   for (const e of ENDS) pane.addEventListener(e, end, true);
   replaying = end;
   step();
 }
+
+// ---------- the tint ----------
+// What an assistant wrote into a message stays marked while the user goes on writing: a tint
+// behind it, and a bar above the message that says what the tint means and has Undo, which takes
+// out the stretch written last and still standing, and then the one before it. The tint is a CSS
+// highlight over the ranges that hold the text (see glue/mail.css), as the replay's is: nothing
+// of the message is changed for it, and nothing of it is saved or sent. A range lives on with
+// the text: what the user corrects inside it stays tinted, what they write beside it is their
+// own. A range whose text is gone (taken back, or deleted) drops out. The marking ends when the
+// user saves the message, and with the composer, which closes when the message is sent, put
+// away or dropped; the saves the composer and an assistant make by themselves leave it.
+const ADDED = "mcp-added";
+let tinted = [], typing = null;       // the ranges marked; and, during a replay, what has been typed so far
+function tint(range) {
+  if (!range || !globalThis.Highlight || !CSS.highlights) return;
+  tinted.push(range);
+  showTint();
+}
+function untint() { tinted = []; showTint(); }
+function showTint() {
+  tinted = isOpen() ? tinted.filter(r => !r.collapsed && r.startContainer.isConnected) : [];
+  const marked = typing && isOpen() ? [...tinted, typing] : tinted;
+  if (!marked.length) { CSS.highlights?.delete(ADDED); $("mcp-tint")?.remove(); return; }
+  CSS.highlights.set(ADDED, new Highlight(...marked));
+  if (!$("mcp-tint")) {
+    const undo = el("button", { type: "button", textContent: "Undo", title: "Take out what the assistant wrote last" });
+    undo.dataset.act = "undo";
+    undo.onclick = () => mail.takeBack();
+    $("c-body").before(el("div", { id: "mcp-tint" }, el("i"), el("span", { textContent: "The assistant wrote the tinted text." }), undo));
+  }
+  $("mcp-tint").querySelector("button").hidden = !mail.canTakeBack();
+}
+// What an assistant wrote, as an entry of the undo history: taken out by Undo, and put back by
+// Redo with its tint.
+const entryFor = put => ({ undo: put.undo, redo: async () => { await put.redo(); tint(put.range()); }, alive: put.alive });
 
 // ---------- Settings ----------
 // A section of its own, put in before the update note: the switch and, while it is on, one row

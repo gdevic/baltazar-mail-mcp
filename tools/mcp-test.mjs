@@ -264,6 +264,8 @@ let mine = await tab(ops);
     "with several drafts the server says to ask the user which, in its own words before what is marked as mail: " + several.text.slice(0, 160));
   const added = await first.call("draft_message", { account: "gmail", mode: "continue", after: "a line", body: "x" });
   ok(!added.error && added.value.id === "D9" && !added.text.startsWith("Mail data"), "and an answer that holds no mail is not marked as mail: " + added.text);
+  const swapped = await first.call("draft_message", { account: "gmail", mode: "replace", selection: "0123456789ab", edits: [{ find: "a word", with: "another" }] });
+  ok(swapped.error && /older copy of Baltazar Mail's AI access/.test(swapped.text), "what needs more than this tab's copy of the page has is still refused: " + swapped.text);
   const r = await first.call("list_folders");
   ok(r.error && /Several mailboxes/.test(r.text) && /me@gmail.example \(gmail\)/.test(r.text), "with two mailboxes a call must say which: " + r.text);
   ok(JSON.parse((await first.call("list_folders", { account: "gmail" })).text)[0].id === "INBOX" && JSON.parse((await first.call("list_folders", { account: "me@example.com" })).text)[0].id === "1", "and each answers for itself");
